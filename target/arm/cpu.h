@@ -385,6 +385,10 @@ typedef struct CPUARMState {
         uint64_t c9_pmuserenr; /* perf monitor user enable */
         uint64_t c9_pmselr; /* perf monitor counter selection register */
         uint64_t c9_pminten; /* perf monitor interrupt enables */
+        uint64_t c9_pmevcnt; /* perf monitor selected counter */
+        uint64_t ev_type[32]; /* perf monitor selected type */
+        uint64_t ev_last_reset[32]; /* for reset implementation */
+
         union { /* Memory attribute redirection */
             struct {
 #ifdef HOST_WORDS_BIGENDIAN
@@ -468,10 +472,23 @@ typedef struct CPUARMState {
         uint64_t oslsr_el1; /* OS Lock Status */
         uint64_t mdcr_el2;
         uint64_t mdcr_el3;
-        /* If the counter is enabled, this stores the last time the counter
-         * was reset. Otherwise it stores the counter value
+        /* Stores the architectural value of the counter *the last time it was
+         * updated* by pmccntr_op_start. Accesses should always be surrounded
+         * by pmccntr_op_start/pmccntr_op_finish to guarantee the latest
+         * architecturally-correct value is being read/set.
          */
         uint64_t c15_ccnt;
+        /* Stores the delta between the architectural value and the underlying
+         * cycle count during normal operation. It is used to update c15_ccnt
+         * to be the correct architectural value before accesses. During
+         * accesses, c15_ccnt_delta contains the underlying count being used
+         * for the access, after which it reverts to the delta value in
+         * pmccntr_op_finish.
+         */
+        uint64_t c15_ccnt_delta;
+        uint64_t c14_pmevcntr[31];
+        uint64_t c14_pmevcntr_delta[31];
+        uint64_t c14_pmevtyper[31];
         uint64_t pmccfiltr_el0; /* Performance Monitor Filter Register */
         uint64_t vpidr_el2; /* Virtualization Processor ID Register */
         uint64_t vmpidr_el2; /* Virtualization Multiprocessor ID Register */
@@ -720,6 +737,9 @@ struct ARMCPU {
 
     /* Timers used by the generic (architected) timer */
     QEMUTimer *gt_timer[NUM_GTIMERS];
+    /* Timer used by the PMU. Its state is restored after migration by
+     * pmu_op_finish() - it does not need other handling during migration */
+    QEMUTimer *pmu_timer;
     /* GPIO outputs for generic timer */
     qemu_irq gt_timer_outputs[NUM_GTIMERS];
     /* GPIO output for GICv3 maintenance interrupt signal */
@@ -818,6 +838,8 @@ struct ARMCPU {
         uint64_t id_aa64isar1;
         uint64_t id_aa64pfr0;
         uint64_t id_aa64pfr1;
+        uint64_t id_aa64mmfr0;
+        uint64_t id_aa64mmfr1;
     } isar;
     uint32_t midr;
     uint32_t revidr;
@@ -827,8 +849,8 @@ struct ARMCPU {
     uint32_t id_pfr0;
     uint32_t id_pfr1;
     uint32_t id_dfr0;
-    uint32_t pmceid0;
-    uint32_t pmceid1;
+    uint64_t pmceid0;
+    uint64_t pmceid1;
     uint32_t id_afr0;
     uint32_t id_mmfr0;
     uint32_t id_mmfr1;
@@ -839,8 +861,6 @@ struct ARMCPU {
     uint64_t id_aa64dfr1;
     uint64_t id_aa64afr0;
     uint64_t id_aa64afr1;
-    uint64_t id_aa64mmfr0;
-    uint64_t id_aa64mmfr1;
     uint32_t dbgdidr;
     uint32_t clidr;
     uint64_t mp_affinity; /* MP ID without feature bits */
@@ -956,15 +976,47 @@ int cpu_arm_signal_handler(int host_signum, void *pinfo,
                            void *puc);
 
 /**
- * pmccntr_sync
+ * pmccntr_op_start/finish
  * @env: CPUARMState
  *
- * Synchronises the counter in the PMCCNTR. This must always be called twice,
- * once before any action that might affect the timer and again afterwards.
- * The function is used to swap the state of the register if required.
- * This only happens when not in user mode (!CONFIG_USER_ONLY)
+ * Convert the counter in the PMCCNTR between its delta form (the typical mode
+ * when it's enabled) and the guest-visible value. These two calls must always
+ * surround any action which might affect the counter.
  */
-void pmccntr_sync(CPUARMState *env);
+void pmccntr_op_start(CPUARMState *env);
+void pmccntr_op_finish(CPUARMState *env);
+
+/**
+ * pmu_op_start/finish
+ * @env: CPUARMState
+ *
+ * Convert all PMU counters between their delta form (the typical mode when
+ * they are enabled) and the guest-visible values. These two calls must
+ * surround any action which might affect the counters.
+ */
+void pmu_op_start(CPUARMState *env);
+void pmu_op_finish(CPUARMState *env);
+
+/**
+ * Called when a PMU counter is due to overflow
+ */
+void arm_pmu_timer_cb(void *opaque);
+
+/**
+ * Functions to register as EL change hooks for PMU mode filtering
+ */
+void pmu_pre_el_change(ARMCPU *cpu, void *ignored);
+void pmu_post_el_change(ARMCPU *cpu, void *ignored);
+
+/*
+ * get_pmceid
+ * @env: CPUARMState
+ * @which: which PMCEID register to return (0 or 1)
+ *
+ * Return the PMCEID[01]_EL0 register values corresponding to the counters
+ * which are supported given the current configuration
+ */
+uint64_t get_pmceid(CPUARMState *env, unsigned which);
 
 /* SCTLR bit meanings. Several bits have been reused in newer
  * versions of the architecture; in that case we define constants
@@ -1027,7 +1079,8 @@ void pmccntr_sync(CPUARMState *env);
 
 #define MDCR_EPMAD    (1U << 21)
 #define MDCR_EDAD     (1U << 20)
-#define MDCR_SPME     (1U << 17)
+#define MDCR_SPME     (1U << 17)  /* MDCR_EL3 */
+#define MDCR_HPMD     (1U << 17)  /* MDCR_EL2 */
 #define MDCR_SDD      (1U << 16)
 #define MDCR_SPD      (3U << 14)
 #define MDCR_TDRA     (1U << 11)
@@ -1037,6 +1090,7 @@ void pmccntr_sync(CPUARMState *env);
 #define MDCR_HPME     (1U << 7)
 #define MDCR_TPM      (1U << 6)
 #define MDCR_TPMCR    (1U << 5)
+#define MDCR_HPMN     (0x1fU)
 
 /* Not all of the MDCR_EL3 bits are present in the 32-bit SDCR */
 #define SDCR_VALID_MASK (MDCR_EPMAD | MDCR_EDAD | MDCR_SPME | MDCR_SPD)
@@ -1249,7 +1303,7 @@ static inline void xpsr_write(CPUARMState *env, uint32_t val, uint32_t mask)
 #define HCR_TIDCP     (1ULL << 20)
 #define HCR_TACR      (1ULL << 21)
 #define HCR_TSW       (1ULL << 22)
-#define HCR_TPC       (1ULL << 23)
+#define HCR_TPCP      (1ULL << 23)
 #define HCR_TPU       (1ULL << 24)
 #define HCR_TTLB      (1ULL << 25)
 #define HCR_TVM       (1ULL << 26)
@@ -1261,6 +1315,26 @@ static inline void xpsr_write(CPUARMState *env, uint32_t val, uint32_t mask)
 #define HCR_CD        (1ULL << 32)
 #define HCR_ID        (1ULL << 33)
 #define HCR_E2H       (1ULL << 34)
+#define HCR_TLOR      (1ULL << 35)
+#define HCR_TERR      (1ULL << 36)
+#define HCR_TEA       (1ULL << 37)
+#define HCR_MIOCNCE   (1ULL << 38)
+#define HCR_APK       (1ULL << 40)
+#define HCR_API       (1ULL << 41)
+#define HCR_NV        (1ULL << 42)
+#define HCR_NV1       (1ULL << 43)
+#define HCR_AT        (1ULL << 44)
+#define HCR_NV2       (1ULL << 45)
+#define HCR_FWB       (1ULL << 46)
+#define HCR_FIEN      (1ULL << 47)
+#define HCR_TID4      (1ULL << 49)
+#define HCR_TICAB     (1ULL << 50)
+#define HCR_TOCU      (1ULL << 52)
+#define HCR_TTLBIS    (1ULL << 54)
+#define HCR_TTLBOS    (1ULL << 55)
+#define HCR_ATA       (1ULL << 56)
+#define HCR_DCT       (1ULL << 57)
+
 /*
  * When we actually implement ARMv8.1-VHE we should add HCR_E2H to
  * HCR_MASK and then clear it again if the feature bit is not set in
@@ -1282,8 +1356,16 @@ static inline void xpsr_write(CPUARMState *env, uint32_t val, uint32_t mask)
 #define SCR_ST                (1U << 11)
 #define SCR_TWI               (1U << 12)
 #define SCR_TWE               (1U << 13)
-#define SCR_AARCH32_MASK      (0x3fff & ~(SCR_RW | SCR_ST))
-#define SCR_AARCH64_MASK      (0x3fff & ~SCR_NET)
+#define SCR_TLOR              (1U << 14)
+#define SCR_TERR              (1U << 15)
+#define SCR_APK               (1U << 16)
+#define SCR_API               (1U << 17)
+#define SCR_EEL2              (1U << 18)
+#define SCR_EASE              (1U << 19)
+#define SCR_NMEA              (1U << 20)
+#define SCR_FIEN              (1U << 21)
+#define SCR_ENSCXT            (1U << 25)
+#define SCR_ATA               (1U << 26)
 
 /* Return the current FPSCR value.  */
 uint32_t vfp_get_fpscr(CPUARMState *env);
@@ -1520,6 +1602,15 @@ FIELD(ID_ISAR6, FHM, 8, 4)
 FIELD(ID_ISAR6, SB, 12, 4)
 FIELD(ID_ISAR6, SPECRES, 16, 4)
 
+FIELD(ID_MMFR4, SPECSEI, 0, 4)
+FIELD(ID_MMFR4, AC2, 4, 4)
+FIELD(ID_MMFR4, XNX, 8, 4)
+FIELD(ID_MMFR4, CNP, 12, 4)
+FIELD(ID_MMFR4, HPDS, 16, 4)
+FIELD(ID_MMFR4, LSM, 20, 4)
+FIELD(ID_MMFR4, CCIDX, 24, 4)
+FIELD(ID_MMFR4, EVT, 28, 4)
+
 FIELD(ID_AA64ISAR0, AES, 4, 4)
 FIELD(ID_AA64ISAR0, SHA1, 8, 4)
 FIELD(ID_AA64ISAR0, SHA2, 12, 4)
@@ -1556,6 +1647,37 @@ FIELD(ID_AA64PFR0, ADVSIMD, 20, 4)
 FIELD(ID_AA64PFR0, GIC, 24, 4)
 FIELD(ID_AA64PFR0, RAS, 28, 4)
 FIELD(ID_AA64PFR0, SVE, 32, 4)
+
+FIELD(ID_DFR0, COPDBG, 0, 4)
+FIELD(ID_DFR0, COPSDBG, 4, 4)
+FIELD(ID_DFR0, MMAPDBG, 8, 4)
+FIELD(ID_DFR0, COPTRC, 12, 4)
+FIELD(ID_DFR0, MMAPTRC, 16, 4)
+FIELD(ID_DFR0, MPROFDBG, 20, 4)
+FIELD(ID_DFR0, PERFMON, 24, 4)
+FIELD(ID_DFR0, TRACEFILT, 28, 4)
+
+FIELD(ID_AA64MMFR0, PARANGE, 0, 4)
+FIELD(ID_AA64MMFR0, ASIDBITS, 4, 4)
+FIELD(ID_AA64MMFR0, BIGEND, 8, 4)
+FIELD(ID_AA64MMFR0, SNSMEM, 12, 4)
+FIELD(ID_AA64MMFR0, BIGENDEL0, 16, 4)
+FIELD(ID_AA64MMFR0, TGRAN16, 20, 4)
+FIELD(ID_AA64MMFR0, TGRAN64, 24, 4)
+FIELD(ID_AA64MMFR0, TGRAN4, 28, 4)
+FIELD(ID_AA64MMFR0, TGRAN16_2, 32, 4)
+FIELD(ID_AA64MMFR0, TGRAN64_2, 36, 4)
+FIELD(ID_AA64MMFR0, TGRAN4_2, 40, 4)
+FIELD(ID_AA64MMFR0, EXS, 44, 4)
+
+FIELD(ID_AA64MMFR1, HAFDBS, 0, 4)
+FIELD(ID_AA64MMFR1, VMIDBITS, 4, 4)
+FIELD(ID_AA64MMFR1, VH, 8, 4)
+FIELD(ID_AA64MMFR1, HPDS, 12, 4)
+FIELD(ID_AA64MMFR1, LO, 16, 4)
+FIELD(ID_AA64MMFR1, PAN, 20, 4)
+FIELD(ID_AA64MMFR1, SPECSEI, 24, 4)
+FIELD(ID_AA64MMFR1, XNX, 28, 4)
 
 QEMU_BUILD_BUG_ON(ARRAY_SIZE(((ARMCPU *)0)->ccsidr) <= R_V7M_CSSELR_INDEX_MASK);
 
@@ -1669,6 +1791,14 @@ static inline bool arm_is_secure(CPUARMState *env)
     return false;
 }
 #endif
+
+/**
+ * arm_hcr_el2_eff(): Return the effective value of HCR_EL2.
+ * E.g. when in secure state, fields in HCR_EL2 are suppressed,
+ * "for all purposes other than a direct read or write access of HCR_EL2."
+ * Not included here are RW, VI, VF.
+ */
+uint64_t arm_hcr_el2_eff(CPUARMState *env);
 
 /* Return true if the specified exception level is running in AArch64 state. */
 static inline bool arm_el_is_aa64(CPUARMState *env, int el)
@@ -2349,59 +2479,11 @@ bool write_cpustate_to_list(ARMCPU *cpu);
 
 #if defined(TARGET_AARCH64)
 #  define TARGET_PHYS_ADDR_SPACE_BITS 48
-#  define TARGET_VIRT_ADDR_SPACE_BITS 64
+#  define TARGET_VIRT_ADDR_SPACE_BITS 48
 #else
 #  define TARGET_PHYS_ADDR_SPACE_BITS 40
 #  define TARGET_VIRT_ADDR_SPACE_BITS 32
 #endif
-
-/**
- * arm_hcr_el2_imo(): Return the effective value of HCR_EL2.IMO.
- * Depending on the values of HCR_EL2.E2H and TGE, this may be
- * "behaves as 1 for all purposes other than direct read/write" or
- * "behaves as 0 for all purposes other than direct read/write"
- */
-static inline bool arm_hcr_el2_imo(CPUARMState *env)
-{
-    switch (env->cp15.hcr_el2 & (HCR_TGE | HCR_E2H)) {
-    case HCR_TGE:
-        return true;
-    case HCR_TGE | HCR_E2H:
-        return false;
-    default:
-        return env->cp15.hcr_el2 & HCR_IMO;
-    }
-}
-
-/**
- * arm_hcr_el2_fmo(): Return the effective value of HCR_EL2.FMO.
- */
-static inline bool arm_hcr_el2_fmo(CPUARMState *env)
-{
-    switch (env->cp15.hcr_el2 & (HCR_TGE | HCR_E2H)) {
-    case HCR_TGE:
-        return true;
-    case HCR_TGE | HCR_E2H:
-        return false;
-    default:
-        return env->cp15.hcr_el2 & HCR_FMO;
-    }
-}
-
-/**
- * arm_hcr_el2_amo(): Return the effective value of HCR_EL2.AMO.
- */
-static inline bool arm_hcr_el2_amo(CPUARMState *env)
-{
-    switch (env->cp15.hcr_el2 & (HCR_TGE | HCR_E2H)) {
-    case HCR_TGE:
-        return true;
-    case HCR_TGE | HCR_E2H:
-        return false;
-    default:
-        return env->cp15.hcr_el2 & HCR_AMO;
-    }
-}
 
 static inline bool arm_excp_unmasked(CPUState *cs, unsigned int excp_idx,
                                      unsigned int target_el)
@@ -2411,6 +2493,7 @@ static inline bool arm_excp_unmasked(CPUState *cs, unsigned int excp_idx,
     bool secure = arm_is_secure(env);
     bool pstate_unmasked;
     int8_t unmasked = 0;
+    uint64_t hcr_el2;
 
     /* Don't take exceptions if they target a lower EL.
      * This check should catch any exceptions that would not be taken but left
@@ -2419,6 +2502,8 @@ static inline bool arm_excp_unmasked(CPUState *cs, unsigned int excp_idx,
     if (cur_el > target_el) {
         return false;
     }
+
+    hcr_el2 = arm_hcr_el2_eff(env);
 
     switch (excp_idx) {
     case EXCP_FIQ:
@@ -2430,13 +2515,13 @@ static inline bool arm_excp_unmasked(CPUState *cs, unsigned int excp_idx,
         break;
 
     case EXCP_VFIQ:
-        if (secure || !arm_hcr_el2_fmo(env) || (env->cp15.hcr_el2 & HCR_TGE)) {
+        if (secure || !(hcr_el2 & HCR_FMO) || (hcr_el2 & HCR_TGE)) {
             /* VFIQs are only taken when hypervized and non-secure.  */
             return false;
         }
         return !(env->daif & PSTATE_F);
     case EXCP_VIRQ:
-        if (secure || !arm_hcr_el2_imo(env) || (env->cp15.hcr_el2 & HCR_TGE)) {
+        if (secure || !(hcr_el2 & HCR_IMO) || (hcr_el2 & HCR_TGE)) {
             /* VIRQs are only taken when hypervized and non-secure.  */
             return false;
         }
@@ -2475,7 +2560,7 @@ static inline bool arm_excp_unmasked(CPUState *cs, unsigned int excp_idx,
                  * to the CPSR.F setting otherwise we further assess the state
                  * below.
                  */
-                hcr = arm_hcr_el2_fmo(env);
+                hcr = hcr_el2 & HCR_FMO;
                 scr = (env->cp15.scr_el3 & SCR_FIQ);
 
                 /* When EL3 is 32-bit, the SCR.FW bit controls whether the
@@ -2492,7 +2577,7 @@ static inline bool arm_excp_unmasked(CPUState *cs, unsigned int excp_idx,
                  * when setting the target EL, so it does not have a further
                  * affect here.
                  */
-                hcr = arm_hcr_el2_imo(env);
+                hcr = hcr_el2 & HCR_IMO;
                 scr = false;
                 break;
             default:
@@ -3272,6 +3357,11 @@ static inline bool isar_feature_aa64_atomics(const ARMISARegisters *id)
     return FIELD_EX64(id->id_aa64isar0, ID_AA64ISAR0, ATOMIC) != 0;
 }
 
+static inline bool isar_feature_aa64_lor(const ARMISARegisters *id)
+{
+    return FIELD_EX64(id->id_aa64mmfr0, ID_AA64MMFR1, LO) != 0;
+}
+
 static inline bool isar_feature_aa64_rdm(const ARMISARegisters *id)
 {
     return FIELD_EX64(id->id_aa64isar0, ID_AA64ISAR0, RDM) != 0;
@@ -3300,6 +3390,11 @@ static inline bool isar_feature_aa64_dp(const ARMISARegisters *id)
 static inline bool isar_feature_aa64_fcma(const ARMISARegisters *id)
 {
     return FIELD_EX64(id->id_aa64isar1, ID_AA64ISAR1, FCMA) != 0;
+}
+
+static inline bool isar_feature_aa64_sb(const ARMISARegisters *id)
+{
+    return FIELD_EX64(id->id_aa64isar1, ID_AA64ISAR1, SB) != 0;
 }
 
 static inline bool isar_feature_aa64_fp16(const ARMISARegisters *id)

@@ -166,7 +166,7 @@ void gic_init_irqs_and_mmio(GICState *s, qemu_irq_handler handler,
      * present because it is required by both software emulation and KVM.
      */
     memory_region_init_io(&s->cpuiomem[0], OBJECT(s), ops ? &ops[1] : NULL,
-                          s, "gic_cpu", s->revision == 2 ? 0x2000 : 0x100);
+                          s, "gic_cpu", s->revision == 2 ? 0x20000 : 0x100);
     sysbus_init_mmio(sbd, &s->cpuiomem[0]);
 
     if (s->virt_extn) {
@@ -176,7 +176,7 @@ void gic_init_irqs_and_mmio(GICState *s, qemu_irq_handler handler,
 
         memory_region_init_io(&s->vcpuiomem, OBJECT(s),
                               virt_ops ? &virt_ops[1] : NULL,
-                              s, "gic_vcpu", 0x2000);
+                              s, "gic_vcpu", 0x20000);
         sysbus_init_mmio(sbd, &s->vcpuiomem);
     }
 }

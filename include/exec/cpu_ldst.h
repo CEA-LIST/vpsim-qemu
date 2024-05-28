@@ -125,6 +125,7 @@ extern __thread uintptr_t helper_retaddr;
 
 /* The memory helpers for tcg-generated code need tcg_target_long etc.  */
 #include "tcg.h"
+#include "qslave.h"
 
 static inline target_ulong tlb_addr_write(const CPUTLBEntry *entry)
 {
@@ -135,12 +136,34 @@ static inline target_ulong tlb_addr_write(const CPUTLBEntry *entry)
 #endif
 }
 
+#if TCG_TARGET_IMPLEMENTS_DYN_TLB
+/* Find the TLB index corresponding to the mmu_idx + address pair.  */
+static inline uintptr_t tlb_index(CPUArchState *env, uintptr_t mmu_idx,
+                                  target_ulong addr)
+{
+    uintptr_t size_mask = env->tlb_mask[mmu_idx] >> CPU_TLB_ENTRY_BITS;
+
+    return (addr >> TARGET_PAGE_BITS) & size_mask;
+}
+
+
+static inline size_t tlb_n_entries(CPUArchState *env, uintptr_t mmu_idx)
+{
+    return (env->tlb_mask[mmu_idx] >> CPU_TLB_ENTRY_BITS) + 1;
+}
+#else
+
 /* Find the TLB index corresponding to the mmu_idx + address pair.  */
 static inline uintptr_t tlb_index(CPUArchState *env, uintptr_t mmu_idx,
                                   target_ulong addr)
 {
     return (addr >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
 }
+static inline size_t tlb_n_entries(CPUArchState *env, uintptr_t mmu_idx)
+{
+    return CPU_TLB_SIZE;
+}
+#endif /* TCG_TARGET_IMPLEMENTS_DYN_TLB */
 
 /* Find the TLB entry corresponding to the mmu_idx + address pair.  */
 static inline CPUTLBEntry *tlb_entry(CPUArchState *env, uintptr_t mmu_idx,
@@ -418,6 +441,8 @@ static inline CPUTLBEntry *tlb_entry(CPUArchState *env, uintptr_t mmu_idx,
 
 #endif /* defined(CONFIG_USER_ONLY) */
 
+#include "qslave.h"
+
 /**
  * tlb_vaddr_to_host:
  * @env: CPUArchState
@@ -442,6 +467,10 @@ static inline void *tlb_vaddr_to_host(CPUArchState *env, abi_ptr addr,
     CPUTLBEntry *tlbentry = tlb_entry(env, mmu_idx, addr);
     abi_ptr tlb_addr;
     uintptr_t haddr;
+    CPUState *cpu = ENV_GET_CPU(env);
+    if (qslave_mem_notify) {
+        return NULL;
+    }
 
     switch (access_type) {
     case 0:
@@ -459,6 +488,8 @@ static inline void *tlb_vaddr_to_host(CPUArchState *env, abi_ptr addr,
 
     if (!tlb_hit(tlb_addr, addr)) {
         /* TLB entry is for a different page */
+        qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+        qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
         return NULL;
     }
 

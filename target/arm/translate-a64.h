@@ -17,7 +17,8 @@
 
 #ifndef TARGET_ARM_TRANSLATE_A64_H
 #define TARGET_ARM_TRANSLATE_A64_H
-
+void qslave_update_counter(CPUState *);
+void qslave_incr_counter(unsigned long *);
 void unallocated_encoding(DisasContext *s);
 
 #define unsupported_encoding(s, insn)                                    \

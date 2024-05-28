@@ -30,6 +30,7 @@
 #include "qemu/help_option.h"
 #include "qemu/uuid.h"
 #include "sysemu/seccomp.h"
+#include "qslave.h"
 
 #ifdef CONFIG_SDL
 #if defined(__APPLE__) || defined(main)
@@ -1889,10 +1890,20 @@ static void main_loop(void)
 #ifdef CONFIG_PROFILER
         ti = profile_getclock();
 #endif
-        main_loop_wait(false);
+        main_loop_wait(true);
 #ifdef CONFIG_PROFILER
         dev_time += profile_getclock() - ti;
 #endif
+    }
+}
+
+extern __thread bool qslave_run_start;
+
+void modelprovider_poll_io(void) {
+    if (qslave_run_start)
+        current_cpu=NULL;
+    if (!main_loop_should_exit()) {
+            main_loop_wait(true);
     }
 }
 
@@ -2973,21 +2984,39 @@ static void register_global_properties(MachineState *ms)
     user_register_global_props();
 }
 
+static int snapshot, linux_boot;
+static const char *initrd_filename;
+static const char *kernel_filename, *kernel_cmdline;
+static const char *boot_order = NULL;
+static const char *boot_once = NULL;
+static DisplayState *ds;
+static QemuOpts *opts, *machine_opts;
+static QemuOpts *icount_opts = NULL, *accel_opts = NULL;
+static QemuOptsList *olist;
+static const char *loadvm = NULL;
+static const char *pid_file = NULL;
+static const char *incoming = NULL;
+static FILE *vmstate_dump_file = NULL;
+
+static bool list_data_dirs = false;
+static char *dir, **dirs;
+typedef struct BlockdevOptions_queue {
+	BlockdevOptions *bdo;
+	Location loc;
+	QSIMPLEQ_ENTRY(BlockdevOptions_queue) entry;
+} BlockdevOptions_queue;
+static int i;
+static  QSIMPLEQ_HEAD(, BlockdevOptions_queue) bdo_queue
+    = QSIMPLEQ_HEAD_INITIALIZER(bdo_queue);
+
+#ifndef STANDALONE
+int modelprovider_configure(int argc, char **argv, char **envp)
+#else
 int main(int argc, char **argv, char **envp)
+#endif
 {
-    int i;
-    int snapshot, linux_boot;
-    const char *initrd_filename;
-    const char *kernel_filename, *kernel_cmdline;
-    const char *boot_order = NULL;
-    const char *boot_once = NULL;
-    DisplayState *ds;
-    QemuOpts *opts, *machine_opts;
-    QemuOpts *icount_opts = NULL, *accel_opts = NULL;
-    QemuOptsList *olist;
     int optind;
     const char *optarg;
-    const char *loadvm = NULL;
     MachineClass *machine_class;
     const char *cpu_model;
     const char *vga_model = NULL;
@@ -3005,15 +3034,6 @@ int main(int argc, char **argv, char **envp)
     FILE *vmstate_dump_file = NULL;
     Error *main_loop_err = NULL;
     Error *err = NULL;
-    bool list_data_dirs = false;
-    char *dir, **dirs;
-    typedef struct BlockdevOptions_queue {
-        BlockdevOptions *bdo;
-        Location loc;
-        QSIMPLEQ_ENTRY(BlockdevOptions_queue) entry;
-    } BlockdevOptions_queue;
-    QSIMPLEQ_HEAD(, BlockdevOptions_queue) bdo_queue
-        = QSIMPLEQ_HEAD_INITIALIZER(bdo_queue);
 
     module_call_init(MODULE_INIT_TRACE);
 
@@ -4521,6 +4541,11 @@ int main(int argc, char **argv, char **envp)
 
     /* from here on runstate is RUN_STATE_PRELAUNCH */
     machine_run_board_init(current_machine);
+    return 0;
+}
+
+void modelprovider_finalize_config(void) {
+	modelprovider_post_init(current_machine);
 
     realtime_init();
 
@@ -4591,9 +4616,9 @@ int main(int argc, char **argv, char **envp)
     if (foreach_device_config(DEV_GDB, gdbserver_start) < 0) {
         exit(1);
     }
-
+#ifdef STANDALONE
     qdev_machine_creation_done();
-
+#endif
     /* TODO: once all bus devices are qdevified, this should be done
      * when bus is created by qdev.c */
     qemu_register_reset(qbus_reset_all_fn, sysbus_get_default());
@@ -4628,7 +4653,7 @@ int main(int argc, char **argv, char **envp)
     if (vmstate_dump_file) {
         /* dump and exit */
         dump_vmstate_json_to_file(vmstate_dump_file);
-        return 0;
+        return;
     }
 
     if (incoming) {
@@ -4644,6 +4669,11 @@ int main(int argc, char **argv, char **envp)
 
     accel_setup_post(current_machine);
     os_setup_post();
+
+#ifndef STANDALONE
+    qslave_run_start=true;
+    return;
+#endif
 
     main_loop();
 
@@ -4667,5 +4697,5 @@ int main(int argc, char **argv, char **envp)
     migration_object_finalize();
     /* TODO: unref root container, check all devices are ok */
 
-    return 0;
+    return;
 }

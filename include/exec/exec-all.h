@@ -360,6 +360,10 @@ struct TranslationBlock {
 
     struct tb_tc tc;
 
+    /* Flag indicating a hit when simulating an I-Cache */
+    int* icache_hit;
+    void* host_pc;
+
     /* original tb when cflags has CF_NOCACHE */
     struct TranslationBlock *orig_tb;
     /* first and second physical page containing code. The lower bit
@@ -493,6 +497,7 @@ static inline void mmap_unlock(void) {}
 
 /* cputlb.c */
 tb_page_addr_t get_page_addr_code(CPUArchState *env1, target_ulong addr);
+tb_page_addr_t get_page_addr_code_with_host(CPUArchState *env, target_ulong addr, void** host);
 
 void tlb_reset_dirty(CPUState *cpu, ram_addr_t start1, ram_addr_t length);
 void tlb_set_dirty(CPUState *cpu, target_ulong vaddr);

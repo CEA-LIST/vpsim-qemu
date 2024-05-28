@@ -21,6 +21,8 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "qslave.h"
+
 #if DATA_SIZE == 8
 #define SUFFIX q
 #define LSUFFIX q
@@ -118,6 +120,7 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr,
     unsigned a_bits = get_alignment_bits(get_memop(oi));
     uintptr_t haddr;
     DATA_TYPE res;
+    CPUState *cpu = ENV_GET_CPU(env);
 
     if (addr & ((1 << a_bits) - 1)) {
         cpu_unaligned_access(ENV_GET_CPU(env), addr, READ_ACCESS_TYPE,
@@ -129,8 +132,14 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr,
         if (!VICTIM_TLB_HIT(ADDR_READ, addr)) {
             tlb_fill(ENV_GET_CPU(env), addr, DATA_SIZE, READ_ACCESS_TYPE,
                      mmu_idx, retaddr);
+            index = tlb_index(env, mmu_idx, addr);
+            entry = tlb_entry(env, mmu_idx, addr);
         }
         tlb_addr = entry->ADDR_READ;
+        if (qslave_counter_enable) {
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
+        }
     }
 
     /* Handle an IO access.  */
@@ -168,6 +177,10 @@ WORD_TYPE helper_le_ld_name(CPUArchState *env, target_ulong addr,
     }
 
     haddr = addr + entry->addend;
+    if (qslave_mem_notify) {
+        qslave_mem_notify(0 /*not write*/, (void*)haddr, addr, DATA_SIZE);
+    }
+
 #if DATA_SIZE == 1
     res = glue(glue(ld, LSUFFIX), _p)((uint8_t *)haddr);
 #else
@@ -198,6 +211,8 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr,
         if (!VICTIM_TLB_HIT(ADDR_READ, addr)) {
             tlb_fill(ENV_GET_CPU(env), addr, DATA_SIZE, READ_ACCESS_TYPE,
                      mmu_idx, retaddr);
+            index = tlb_index(env, mmu_idx, addr);
+            entry = tlb_entry(env, mmu_idx, addr);
         }
         tlb_addr = entry->ADDR_READ;
     }
@@ -237,6 +252,9 @@ WORD_TYPE helper_be_ld_name(CPUArchState *env, target_ulong addr,
     }
 
     haddr = addr + entry->addend;
+    if (qslave_mem_notify) {
+        qslave_mem_notify(0 /*not write*/, (void*)haddr, addr, DATA_SIZE);
+    }
     res = glue(glue(ld, LSUFFIX), _be_p)((uint8_t *)haddr);
     return res;
 }
@@ -283,6 +301,7 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     target_ulong tlb_addr = tlb_addr_write(entry);
     unsigned a_bits = get_alignment_bits(get_memop(oi));
     uintptr_t haddr;
+    CPUState *cpu = ENV_GET_CPU(env);
 
     if (addr & ((1 << a_bits) - 1)) {
         cpu_unaligned_access(ENV_GET_CPU(env), addr, MMU_DATA_STORE,
@@ -294,8 +313,14 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
         if (!VICTIM_TLB_HIT(addr_write, addr)) {
             tlb_fill(ENV_GET_CPU(env), addr, DATA_SIZE, MMU_DATA_STORE,
                      mmu_idx, retaddr);
+            index = tlb_index(env, mmu_idx, addr);
+            entry = tlb_entry(env, mmu_idx, addr);
         }
         tlb_addr = tlb_addr_write(entry) & ~TLB_INVALID_MASK;
+        if (qslave_counter_enable) {
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
+        }
     }
 
     /* Handle an IO access.  */
@@ -344,6 +369,10 @@ void helper_le_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     }
 
     haddr = addr + entry->addend;
+    if (qslave_mem_notify) {
+        qslave_mem_notify(1 /*write*/, (void*)haddr, addr, DATA_SIZE);
+    }
+
 #if DATA_SIZE == 1
     glue(glue(st, SUFFIX), _p)((uint8_t *)haddr, val);
 #else
@@ -372,6 +401,8 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
         if (!VICTIM_TLB_HIT(addr_write, addr)) {
             tlb_fill(ENV_GET_CPU(env), addr, DATA_SIZE, MMU_DATA_STORE,
                      mmu_idx, retaddr);
+            index = tlb_index(env, mmu_idx, addr);
+            entry = tlb_entry(env, mmu_idx, addr);
         }
         tlb_addr = tlb_addr_write(entry) & ~TLB_INVALID_MASK;
     }
@@ -422,6 +453,9 @@ void helper_be_st_name(CPUArchState *env, target_ulong addr, DATA_TYPE val,
     }
 
     haddr = addr + entry->addend;
+    if (qslave_mem_notify) {
+        qslave_mem_notify(1 /*write*/, (void*)haddr, addr, DATA_SIZE);
+    }
     glue(glue(st, SUFFIX), _be_p)((uint8_t *)haddr, val);
 }
 #endif /* DATA_SIZE > 1 */

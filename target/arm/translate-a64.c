@@ -39,6 +39,14 @@
 #include "translate-a64.h"
 #include "qemu/atomic128.h"
 
+#include "qslave.h"
+
+unsigned long qslave_fp_instr = 0;
+unsigned long qslave_sve_instr = 0;
+unsigned long qslave_ldst_instr = 0;
+
+int qslave_counter_enable = 1;
+
 static TCGv_i64 cpu_X[32];
 static TCGv_i64 cpu_pc;
 
@@ -87,6 +95,35 @@ typedef void CryptoThreeOpIntFn(TCGv_ptr, TCGv_ptr, TCGv_i32);
 typedef void CryptoThreeOpFn(TCGv_ptr, TCGv_ptr, TCGv_ptr);
 typedef void AtomicThreeOpFn(TCGv_i64, TCGv_i64, TCGv_i64, TCGArg, TCGMemOp);
 
+void qslave_update_counter(CPUState *cpu)
+{
+    if (!qslave_counter_enable)
+        return;
+
+    qslave_stat_cpu[cpu->cpu_index].executed_fp_instructions.v += qslave_fp_instr;
+    qslave_stat_cpu[cpu->cpu_index].executed_sve_instructions.v += qslave_sve_instr;
+    qslave_stat_cpu[cpu->cpu_index].load_store.v += qslave_ldst_instr;
+    qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v += qslave_ldst_instr;
+    qslave_fp_instr = 0;
+    qslave_sve_instr = 0;
+    qslave_ldst_instr = 0;
+}
+
+void qslave_incr_counter(unsigned long * qslave_counter)
+{
+    if (!qslave_counter_enable)
+        return;
+
+    TCGv_ptr tmp = tcg_const_ptr((tcg_target_long)qslave_counter);
+    TCGv tp = tcg_temp_new();
+
+    tcg_gen_ld_tl(tp,tmp,0);
+    tcg_gen_addi_tl(tp,tp,1);
+    tcg_gen_st_tl(tp,tmp,0);
+
+    tcg_temp_free(tp);
+    tcg_temp_free_ptr(tmp);
+}
 /* initialize TCG globals.  */
 void a64_translate_init(void)
 {
@@ -1254,6 +1291,7 @@ bool sve_access_check(DisasContext *s)
                            s->sve_excp_el);
         return false;
     }
+    qslave_incr_counter(&qslave_sve_instr);
     return fp_access_check(s);
 }
 
@@ -1543,7 +1581,19 @@ static void handle_sync(DisasContext *s, uint32_t insn,
          */
         gen_goto_tb(s, 0, s->pc);
         return;
+    case 7: /* SB */
+		if (crm != 0 || !dc_isar_feature(aa64_sb, s)) {
+			goto do_unallocated;
+		}
+		/*
+		 * TODO: There is no speculation barrier opcode for TCG;
+		 * MB and end the TB instead.
+		 */
+		tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
+		gen_goto_tb(s, 0, s->pc);
+		return;
     default:
+    do_unallocated:
         unallocated_encoding(s);
         return;
     }
@@ -2199,7 +2249,8 @@ static void gen_compare_and_swap_pair(DisasContext *s, int rs, int rt,
         tcg_gen_qemu_ld_i64(d1, addr, memidx,
                             MO_64 | MO_ALIGN_16 | s->be_data);
         tcg_gen_addi_i64(a2, addr, 8);
-        tcg_gen_qemu_ld_i64(d2, addr, memidx, MO_64 | s->be_data);
+        //tcg_gen_qemu_ld_i64(d2, addr, memidx, MO_64 | s->be_data);
+        tcg_gen_qemu_ld_i64(d2, a2, memidx, MO_64 | s->be_data);
 
         /* Compare the two words, also in memory order.  */
         tcg_gen_setcond_i64(TCG_COND_EQ, c1, d1, s1);
@@ -2290,6 +2341,12 @@ static void disas_ldst_excl(DisasContext *s, uint32_t insn)
         }
         return;
 
+    case 0x8: /* STLLR */
+        if (!dc_isar_feature(aa64_lor, s)) {
+            break;
+        }
+        /* StoreLORelease is the same as Store-Release for QEMU.  */
+        /* fallthru */
     case 0x9: /* STLR */
         /* Generate ISS for non-exclusive accesses including LASR.  */
         if (rn == 31) {
@@ -2301,6 +2358,12 @@ static void disas_ldst_excl(DisasContext *s, uint32_t insn)
                   disas_ldst_compute_iss_sf(size, false, 0), is_lasr);
         return;
 
+    case 0xc: /* LDLAR */
+        if (!dc_isar_feature(aa64_lor, s)) {
+            break;
+        }
+        /* LoadLOAcquire is the same as Load-Acquire for QEMU.  */
+        /* fallthru */
     case 0xd: /* LDAR */
         /* Generate ISS for non-exclusive accesses including LASR.  */
         if (rn == 31) {
@@ -13306,6 +13369,7 @@ static void disas_data_proc_simd(DisasContext *s, uint32_t insn)
 static void disas_data_proc_simd_fp(DisasContext *s, uint32_t insn)
 {
     if (extract32(insn, 28, 1) == 1 && extract32(insn, 30, 1) == 0) {
+        qslave_incr_counter(&qslave_fp_instr);
         disas_data_proc_fp(s, insn);
     } else {
         /* SIMD, including crypto */
@@ -13343,6 +13407,7 @@ static void disas_a64_insn(CPUARMState *env, DisasContext *s)
     case 0x6:
     case 0xc:
     case 0xe:      /* Loads and stores */
+        qslave_incr_counter(&qslave_ldst_instr);
         disas_ldst(s, insn);
         break;
     case 0x5:

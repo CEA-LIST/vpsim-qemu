@@ -34,6 +34,7 @@
 #include "qemu/main-loop.h"
 #include "block/aio.h"
 #include "qemu/error-report.h"
+#include "qslave.h"
 
 #ifndef _WIN32
 
@@ -217,7 +218,6 @@ static void glib_pollfds_poll(void)
 }
 
 #define MAX_MAIN_LOOP_SPIN (1000)
-
 static int os_host_main_loop_wait(int64_t timeout)
 {
     GMainContext *context = g_main_context_default();

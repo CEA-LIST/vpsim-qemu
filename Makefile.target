@@ -95,6 +95,10 @@ all: $(PROGS) stap
 	@true
 
 #########################################################
+# qslave objects
+obj-y += qslave.o
+
+#########################################################
 # cpu emulator library
 obj-y += exec.o
 obj-y += accel/
@@ -120,6 +124,10 @@ obj-y += linux-user/
 obj-y += gdbstub.o thunk.o
 
 endif #CONFIG_LINUX_USER
+
+
+################ Q-SLAVE extension
+# QEMU_CFLAGS+=-shared -fPIC
 
 #########################################################
 # BSD user emulator target

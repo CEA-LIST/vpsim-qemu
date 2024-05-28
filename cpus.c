@@ -53,6 +53,7 @@
 #include "hw/nmi.h"
 #include "sysemu/replay.h"
 #include "hw/boards.h"
+#include "qslave.h"
 
 #ifdef CONFIG_LINUX
 
@@ -240,18 +241,26 @@ static int64_t cpu_get_icount_executed(CPUState *cpu)
     return cpu->icount_budget - (cpu->icount_decr.u16.low + cpu->icount_extra);
 }
 
-/*
- * Update the global shared timer_state.qemu_icount to take into
- * account executed instructions. This is done by the TCG vCPU
- * thread so the main-loop can see time has moved forward.
- */
-static void cpu_update_icount_locked(CPUState *cpu)
-{
-    int64_t executed = cpu_get_icount_executed(cpu);
-    cpu->icount_budget -= executed;
+extern __thread bool qslave_run_start;
+static uint64_t qslave_since_last_sync=0;
+static uint64_t qslave_last_ts=0;
+static uint64_t __qslave_global_quantum;
+static uint64_t __qslave_current_warp;
+static uint64_t __qslave_current_warp_cpu[MAX_CPUS];
+static bool __qslave_current_warp_initialized=0;
+extern void qslave_update_counter(CPUState * cpu);
 
-    atomic_set_i64(&timers_state.qemu_icount,
-                   timers_state.qemu_icount + executed);
+static void qslave_yield_all(CPUState* cpu, uint64_t quantum, int wfi) {
+    qslave_since_last_sync += cpu_get_icount() - qslave_last_ts;
+    qslave_last_ts = cpu_get_icount();
+    if (!wfi) {
+        qslave_yield(cpu, qslave_since_last_sync, wfi);
+        qslave_since_last_sync=0;
+    }
+    else {
+        qslave_yield(cpu, 0, wfi);
+        current_cpu=cpu;
+    }
 }
 
 /*
@@ -259,13 +268,53 @@ static void cpu_update_icount_locked(CPUState *cpu)
  * account executed instructions. This is done by the TCG vCPU
  * thread so the main-loop can see time has moved forward.
  */
-void cpu_update_icount(CPUState *cpu)
+static bool cpu_update_icount_locked(CPUState *cpu)
+{
+    int64_t executed = cpu_get_icount_executed(cpu);
+    cpu->icount_budget -= executed;
+
+    qslave_stat_cpu[cpu->cpu_index].executed_instructions.v+=executed;
+
+    if (!__qslave_current_warp_initialized) {
+        qslave_fill_biases(__qslave_current_warp_cpu,smp_cpus);
+        __qslave_current_warp_initialized=1;
+    }
+
+    __qslave_current_warp_cpu[cpu->cpu_index] += executed;
+
+    if (__qslave_current_warp_cpu[cpu->cpu_index] > __qslave_current_warp) {
+        atomic_set_i64(&timers_state.qemu_icount_bias,
+                               timers_state.qemu_icount_bias +
+                               (__qslave_current_warp_cpu[cpu->cpu_index] -
+                                       __qslave_current_warp));
+        __qslave_current_warp=__qslave_current_warp_cpu[cpu->cpu_index];
+    }
+
+    atomic_set_i64(&timers_state.qemu_icount,
+                       timers_state.qemu_icount + executed);
+    atomic_set_i64(&timers_state.qemu_icount_bias,
+                       timers_state.qemu_icount_bias - executed);
+    if (__qslave_current_warp_cpu[cpu->cpu_index] >= 0xffff) {
+        return true;
+    }
+
+    return false;
+}
+
+/*
+ * Update the global shared timer_state.qemu_icount to take into
+ * account executed instructions. This is done by the TCG vCPU
+ * thread so the main-loop can see time has moved forward.
+ */
+bool cpu_update_icount(CPUState *cpu)
 {
     seqlock_write_lock(&timers_state.vm_clock_seqlock,
                        &timers_state.vm_clock_lock);
-    cpu_update_icount_locked(cpu);
+    bool quantum_exceeded = cpu_update_icount_locked(cpu);
     seqlock_write_unlock(&timers_state.vm_clock_seqlock,
                          &timers_state.vm_clock_lock);
+
+    return quantum_exceeded;
 }
 
 static int64_t cpu_get_icount_raw_locked(void)
@@ -1224,9 +1273,18 @@ static void qemu_tcg_rr_wait_io_event(void)
 {
     CPUState *cpu;
 
+    cpu = first_cpu;
+
     while (all_cpu_threads_idle()) {
         stop_tcg_kick_timer();
-        qemu_cond_wait(first_cpu->halt_cond, &qemu_global_mutex);
+
+        if (qslave_run_start) {
+            qemu_mutex_unlock_iothread();
+            qslave_yield_all(cpu, 0, 1);
+            qemu_mutex_lock_iothread();
+        }
+        else
+            qemu_cond_wait(cpu->halt_cond, &qemu_global_mutex);
     }
 
     start_tcg_kick_timer();
@@ -1466,7 +1524,7 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
     CPUState *cpu = arg;
 
     assert(tcg_enabled());
-    rcu_register_thread();
+
     tcg_register_thread();
 
     qemu_mutex_lock_iothread();
@@ -1479,7 +1537,18 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
 
     /* wait for initial kick-off after machine start */
     while (first_cpu->stopped) {
-        qemu_cond_wait(first_cpu->halt_cond, &qemu_global_mutex);
+        if(!qslave_run_start)
+            qemu_cond_wait(first_cpu->halt_cond, &qemu_global_mutex);
+        else
+        {
+            current_cpu=first_cpu;
+            qemu_mutex_unlock_iothread();
+            qslave_yield_all(cpu, 0, 1);
+            qemu_mutex_lock_iothread();
+
+            if (first_cpu->stopped)
+                continue;
+        }
 
         /* process any pending work */
         CPU_FOREACH(cpu) {
@@ -1496,6 +1565,12 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
     cpu->exit_request = 1;
 
     while (1) {
+        if (!cpu) {
+            cpu = first_cpu;
+        }
+        current_cpu=cpu;
+        assert(current_cpu);
+
         qemu_mutex_unlock_iothread();
         replay_mutex_lock();
         qemu_mutex_lock_iothread();
@@ -1509,12 +1584,10 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
 
         replay_mutex_unlock();
 
-        if (!cpu) {
-            cpu = first_cpu;
-        }
+        __qslave_current_warp = 0;
+        __qslave_current_warp_initialized=0;
 
         while (cpu && !cpu->queued_work_first && !cpu->exit_request) {
-
             atomic_mb_set(&tcg_current_rr_cpu, cpu);
             current_cpu = cpu;
 
@@ -1530,6 +1603,7 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
                 r = tcg_cpu_exec(cpu);
 
                 process_icount_data(cpu);
+                qslave_update_counter(cpu);
                 qemu_mutex_lock_iothread();
 
                 if (r == EXCP_DEBUG) {
@@ -1547,7 +1621,6 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
                 }
                 break;
             }
-
             cpu = CPU_NEXT(cpu);
         } /* while (cpu && !cpu->exit_request).. */
 
@@ -1558,13 +1631,9 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
             atomic_mb_set(&cpu->exit_request, 0);
         }
 
-        if (use_icount && all_cpu_threads_idle()) {
-            /*
-             * When all cpus are sleeping (e.g in WFI), to avoid a deadlock
-             * in the main_loop, wake it up in order to start the warp timer.
-             */
-            qemu_notify_event();
-        }
+        qemu_notify_event();
+
+        qslave_yield_all((cpu? cpu: first_cpu), 0, 0);
 
         qemu_tcg_rr_wait_io_event();
         deal_with_unplugged_cpus();
@@ -1572,6 +1641,18 @@ static void *qemu_tcg_rr_cpu_thread_fn(void *arg)
 
     rcu_unregister_thread();
     return NULL;
+}
+
+static CPUState* __qslave_launch_cpu;
+
+void modelprovider_run_cpu(CPUState* cpu, uint64_t quantum) {
+	__qslave_global_quantum=quantum;
+	qemu_tcg_rr_cpu_thread_fn(__qslave_launch_cpu);
+}
+
+static void qslave_prepare_process(CPUState* cpu) {
+	__qslave_launch_cpu = cpu;
+	cpu->thread->thread = pthread_self();
 }
 
 static void *qemu_hax_cpu_thread_fn(void *arg)
@@ -1845,6 +1926,12 @@ void qemu_mutex_lock_iothread_impl(const char *file, int line)
 {
     QemuMutexLockFunc bql_lock = atomic_read(&qemu_bql_mutex_lock_func);
 
+    if (qslave_run_start) {
+        while (qemu_mutex_iothread_locked()) {
+            modelprovider_wait_unlock();
+        }
+    }
+
     g_assert(!qemu_mutex_iothread_locked());
     bql_lock(&qemu_global_mutex, file, line);
     iothread_locked = true;
@@ -1855,6 +1942,9 @@ void qemu_mutex_unlock_iothread(void)
     g_assert(qemu_mutex_iothread_locked());
     iothread_locked = false;
     qemu_mutex_unlock(&qemu_global_mutex);
+    if (qslave_run_start) {
+        modelprovider_unlock();
+    }
 }
 
 static bool all_vcpus_paused(void)
@@ -1967,10 +2057,7 @@ static void qemu_tcg_init_vcpu(CPUState *cpu)
         } else {
             /* share a single thread for all cpus with TCG */
             snprintf(thread_name, VCPU_THREAD_NAME_SIZE, "ALL CPUs/TCG");
-            qemu_thread_create(cpu->thread, thread_name,
-                               qemu_tcg_rr_cpu_thread_fn,
-                               cpu, QEMU_THREAD_JOINABLE);
-
+            qslave_prepare_process(cpu);
             single_tcg_halt_cond = cpu->halt_cond;
             single_tcg_cpu_thread = cpu->thread;
         }
@@ -2091,10 +2178,11 @@ void qemu_init_vcpu(CPUState *cpu)
     } else {
         qemu_dummy_start_vcpu(cpu);
     }
-
+#ifdef STANDALONE
     while (!cpu->created) {
         qemu_cond_wait(&qemu_cpu_cond, &qemu_global_mutex);
     }
+#endif
 }
 
 void cpu_stop_current(void)

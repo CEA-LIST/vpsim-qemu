@@ -605,7 +605,7 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
     return false;
 }
 
-static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
+static inline bool cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
                                     TranslationBlock **last_tb, int *tb_exit)
 {
     uintptr_t ret;
@@ -617,7 +617,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
     *tb_exit = ret & TB_EXIT_MASK;
     if (*tb_exit != TB_EXIT_REQUESTED) {
         *last_tb = tb;
-        return;
+        return false;
     }
 
     *last_tb = NULL;
@@ -630,14 +630,14 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
          * cpu_handle_interrupt.  cpu_handle_interrupt will also
          * clear cpu->icount_decr.u16.high.
          */
-        return;
+        return false;
     }
 
     /* Instruction counter expired.  */
     assert(use_icount);
 #ifndef CONFIG_USER_ONLY
     /* Ensure global icount has gone forward */
-    cpu_update_icount(cpu);
+    bool yield = cpu_update_icount(cpu);
     /* Refill decrementer and continue execution.  */
     insns_left = MIN(0xffff, cpu->icount_budget);
     cpu->icount_decr.u16.low = insns_left;
@@ -650,6 +650,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
             cpu_exec_nocache(cpu, insns_left, tb, false);
         }
     }
+    return yield;
 #endif
 }
 
@@ -722,13 +723,16 @@ int cpu_exec(CPUState *cpu)
             }
 
             tb = tb_find(cpu, last_tb, tb_exit, cflags);
-            cpu_loop_exec_tb(cpu, tb, &last_tb, &tb_exit);
+            if (cpu_loop_exec_tb(cpu, tb, &last_tb, &tb_exit)) {
+                goto yield;
+            }
             /* Try to align the host and virtual clocks
                if the guest is in advance */
             align_clocks(&sc, cpu);
         }
     }
 
+yield:
     cc->cpu_exec_exit(cpu);
     rcu_read_unlock();
 

@@ -14,6 +14,7 @@ void cpu_ticks_init(void);
 void configure_icount(QemuOpts *opts, Error **errp);
 extern int use_icount;
 extern int icount_align_option;
+extern int64_t qslave_quantum;
 
 /* drift information for info jit command */
 extern int64_t max_delay;
