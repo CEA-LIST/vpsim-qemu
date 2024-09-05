@@ -3,8 +3,9 @@
  *
  * @authors  Amir Charif
  *           Arief Wicaksana
+ *           Mohamed Benazouz
  *
- * @version  1.0
+ * @version  1.1
  *
  * @brief  Implementation of the VPSim ModelProvider interface for QEMU.
  *
@@ -21,27 +22,7 @@
 #define _QSLAVE_H_
 
 #include "qemu/osdep.h"
-#include "qapi/error.h"
-#include "hw/sysbus.h"
-#include "hw/vfio/vfio-calxeda-xgmac.h"
-#include "hw/vfio/vfio-amd-xgbe.h"
-#include "hw/display/ramfb.h"
-#include "hw/devices.h"
-#include "net/net.h"
-#include "sysemu/device_tree.h"
-#include "sysemu/numa.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/kvm.h"
-#include "hw/compat.h"
-#include "hw/loader.h"
-#include "exec/address-spaces.h"
-#include "qemu/bitops.h"
-#include "qemu/error-report.h"
 #include "hw/pci-host/gpex.h"
-#include "hw/arm/sysbus-fdt.h"
-#include "hw/platform-bus.h"
-#include "qapi/visitor.h"
-#include "standard-headers/linux/input.h"
 
 #define MAX_CPUS 128
 #define NUM_IRQS 256
@@ -215,7 +196,7 @@ uint64_t qslave_get_l2_st(int index);
 
 uint64_t qslave_get_icache_misses(int index);
 
-void qslave_fill_biases(uint64_t* ts, int n);
+void qslave_fill_biases(uint64_t* ts);
 
 uint64_t qslave_get_ioaccess_read(uint32_t device);
 uint64_t qslave_get_ioaccess_write(uint32_t device);
