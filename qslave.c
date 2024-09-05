@@ -3,8 +3,9 @@
  *
  * @authors  Amir Charif
  *           Arief Wicaksana
+ *			 Mohamed Benazouz
  *
- * @version  1.0
+ * @version  1.1
  *
  * @brief  Implementation of the VPSim ModelProvider interface for QEMU.
  *
@@ -18,12 +19,18 @@
  */
 
 #include "qslave.h"
-#include "hw/arm/arm.h"
-#include "hw/intc/arm_gic.h"
+#include "net/net.h"
+#include "sysemu/sysemu.h"
+#include "hw/loader.h"
+#include "qemu/error-report.h"
 #include "hw/intc/arm_gicv3_common.h"
 #include "hw/irq.h"
-#include "hw/smbios/smbios.h"
+#include "hw/firmware/smbios.h"
 #include "kvm_arm.h"
+#include "migration/vmstate.h"
+#include "hw/char/pl011.h"
+#include "hw/boards.h"
+#include "hw/arm/boot.h"
 
 #define ARCH_GIC_MAINT_IRQ  9
 
@@ -212,11 +219,11 @@ static void* qslave_init_pl011(void* gicdev,char* name,
 		int irq,
 		ReadCb* rd,
 		WriteCb* wr) {
-	DeviceState *dev = qdev_create(NULL, "pl011");
+	DeviceState *dev = qdev_new(TYPE_PL011);
 	SysBusDevice *s = SYS_BUS_DEVICE(dev);
 
 	qdev_prop_set_chr(dev, "chardev", serial_hd(0));
-	qdev_init_nofail(dev);
+	sysbus_realize_and_unref(s, &error_fatal);
 	memory_region_add_subregion(get_system_memory(), base,
 								sysbus_mmio_get_region(s, 0));
 	_qslave_deferred_irq_connections[irq]=s;
@@ -229,10 +236,10 @@ static void* qslave_init_pl031(void* gicdev,char* name,
 		int irq,
 		ReadCb* rd,
 		WriteCb* wr) {
-	DeviceState *dev = qdev_create(NULL, "pl031");
+	DeviceState *dev = qdev_new("pl031");
 	SysBusDevice *s = SYS_BUS_DEVICE(dev);
 
-	qdev_init_nofail(dev);
+	sysbus_realize_and_unref(s, &error_fatal);
 	memory_region_add_subregion(get_system_memory(), base,
 								sysbus_mmio_get_region(s, 0));
 	_qslave_deferred_irq_connections[irq]=s;
@@ -245,14 +252,8 @@ static void* qslave_init_flash(void* hdl,char* name,
 		int irq,
 		ReadCb* rd,
 		WriteCb* wr) {
-	DriveInfo *dinfo = drive_get_next(IF_PFLASH);
-	DeviceState *dev = qdev_create(NULL, "cfi.pflash01");
+	DeviceState *dev = qdev_new("cfi.pflash01");
 	const uint64_t sectorlength = 256 * 1024;
-
-	if (dinfo) {
-		qdev_prop_set_drive(dev, "drive", blk_by_legacy_dinfo(dinfo),
-							&error_abort);
-	}
 
 	uint64_t size=(uint64_t)irq / sectorlength;
 	printf("Size is %ld\n", size);
@@ -266,7 +267,7 @@ static void* qslave_init_flash(void* hdl,char* name,
 	qdev_prop_set_uint16(dev, "id2", 0x00);
 	qdev_prop_set_uint16(dev, "id3", 0x00);
 	qdev_prop_set_string(dev, "name", name);
-	qdev_init_nofail(dev);
+	sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
 
 	memory_region_add_subregion(get_system_memory(), base,
@@ -286,10 +287,10 @@ static void qslave_build_smbios(FWCfgState *fw_cfg)
 
     smbios_set_defaults("QEMU", product,
                         "1.0", false,
-                        true, SMBIOS_ENTRY_POINT_30);
+                        true, SMBIOS_ENTRY_POINT_TYPE_64);
 
-    smbios_get_tables(NULL, 0, &smbios_tables, &smbios_tables_len,
-                      &smbios_anchor, &smbios_anchor_len);
+    smbios_get_tables(current_machine, NULL, 0, &smbios_tables, &smbios_tables_len,
+                      &smbios_anchor, &smbios_anchor_len, &error_fatal);
 
     if (smbios_anchor) {
         fw_cfg_add_file(fw_cfg, "etc/smbios/smbios-tables",
@@ -305,7 +306,7 @@ static FWCfgState *create_fw_cfg(uint64_t base,uint64_t size)
     FWCfgState *fw_cfg;
 
     fw_cfg = fw_cfg_init_mem_wide(base + 8, base, 8, base + 16, &address_space_memory);
-    fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, (uint16_t)smp_cpus);
+    fw_cfg_add_i16(fw_cfg, FW_CFG_NB_CPUS, (uint16_t)current_machine->smp.cpus);
 
     rom_set_fw(fw_cfg);
 
@@ -344,8 +345,8 @@ static void* create_pcie(void* devh, char* name,
     int i;
     PCIHostState *pci;
 
-    dev = qdev_create(NULL, TYPE_GPEX_HOST);
-    qdev_init_nofail(dev);
+    dev = qdev_new(TYPE_GPEX_HOST);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 
     ecam_alias = g_new0(MemoryRegion, 1);
     ecam_reg = sysbus_mmio_get_region(SYS_BUS_DEVICE(dev), 0);
@@ -373,6 +374,7 @@ static void* create_pcie(void* devh, char* name,
     }
 
     pci = PCI_HOST_BRIDGE(dev);
+	pci->bypass_iommu = false;
     if (pci->bus) {
         for (i = 0; i < nb_nics; i++) {
             NICInfo *nd = &nd_table[i];
@@ -422,9 +424,9 @@ static void create_gicv2(qslave_special_initiator* inits)
         exit(1);
     }
 
-    gicdev = qdev_create(NULL, gictype);
+    gicdev = qdev_new(gictype);
     qdev_prop_set_uint32(gicdev, "revision", type);
-    qdev_prop_set_uint32(gicdev, "num-cpu", smp_cpus);
+    qdev_prop_set_uint32(gicdev, "num-cpu", current_machine->smp.cpus);
 
     qdev_prop_set_uint32(gicdev, "num-irq", NUM_IRQS + 32);
     qdev_prop_set_bit(gicdev, "has-security-extensions", true);
@@ -432,7 +434,7 @@ static void create_gicv2(qslave_special_initiator* inits)
 
     qdev_prop_set_bit(gicdev, "has-virtualization-extensions", true);
 
-    qdev_init_nofail(gicdev);
+    sysbus_realize_and_unref(SYS_BUS_DEVICE(gicdev), &error_fatal);
     __qslave_gic_handle = gicdev;
 
     for (i = 0; i < NUM_IRQS; i++) {
@@ -454,9 +456,9 @@ static void create_gicv3(qslave_special_initiator* inits)
 
     gictype = "arm-gicv3";
 
-    gicdev = qdev_create(NULL, gictype);
+    gicdev = qdev_new(gictype);
     qdev_prop_set_uint32(gicdev, "revision", type);
-    qdev_prop_set_uint32(gicdev, "num-cpu", smp_cpus);
+    qdev_prop_set_uint32(gicdev, "num-cpu", current_machine->smp.cpus);
 
     qdev_prop_set_uint32(gicdev, "num-irq", NUM_IRQS + 32);
     qdev_prop_set_bit(gicdev, "has-security-extensions", false);
@@ -603,14 +605,9 @@ void modelprovider_write_default(void *opaque,
 
 uint64_t modelprovider_get_start_pc(int index) { return _start_pcs[index]; }
 
-static int64_t my_cpu_get_icount_executed(CPUState *cpu)
-{
-    return cpu->icount_budget - (cpu->icount_decr.u16.low + cpu->icount_extra);
-}
-
 static void _qslave_ioaccess_notify_functor(uint32_t device, int write, void* phys, uint64_t virt, uint64_t size, uint64_t tag) {
     //Modify the following execution counter (qemu timestamp) if it is not correct from within the context this function is called!
-    uint64_t executed = current_cpu->icount_budget - (current_cpu->icount_decr.u16.low + current_cpu->icount_extra);
+    uint64_t executed = current_cpu->icount_budget - (cpu_neg(current_cpu)->icount_decr.u16.low + current_cpu->icount_extra);
     qslave_ioaccess_notify_model(device, executed, write, phys, virt, size, tag);
 }
 
@@ -623,15 +620,9 @@ IOAccessCbInternal qslave_ioaccess_notify=NULL;
 IOAccessCb qslave_ioaccess_notify_model=NULL;
 
 static void _qslave_mem_notify_functor(int write, void* phys, uint64_t virt, uint64_t size) {
-        uint64_t executed = current_cpu->icount_budget - (current_cpu->icount_decr.u16.low + current_cpu->icount_extra);
+        uint64_t executed = current_cpu->icount_budget - (cpu_neg(current_cpu)->icount_decr.u16.low + current_cpu->icount_extra);
 	qslave_mem_notify_model(_proxies[current_cpu->cpu_index], executed,
 			write, phys, virt, size);
-        //printf("======= _qslave_mem_notify_functor =======");
-        //printf("  executed instructions: %ldb", (long) executed);
-        //printf(",  cpu index: %d", (int) current_cpu->cpu_index);
-        //printf(", write: %d", write);
-        //printf(", addr: %lx",  virt);
-        //printf(", size: %d\n", (int) size);
 }
 
 void modelprovider_register_main_mem_callback(MainMemCb cb) {
@@ -665,8 +656,8 @@ FillBiasCb _modelprovider_fill_bias_cb=NULL;
 void modelprovider_register_fill_bias_cb(FillBiasCb cb) {
 	_modelprovider_fill_bias_cb=cb;
 }
-void qslave_fill_biases(uint64_t* ts, int n) {
-	_modelprovider_fill_bias_cb(ts,n);
+void qslave_fill_biases(uint64_t* ts) {
+	_modelprovider_fill_bias_cb(ts,current_machine->smp.cpus);
 }
 
 
@@ -680,10 +671,10 @@ void* modelprovider_create_internal_dev_default(char* name,
 	if (si) {
 		return si->init(si->handle,name,base,irq,rd,wr);
 	} else {
-		DeviceState *dev = qdev_create(NULL, name);
+		DeviceState *dev = qdev_new(name);
 		SysBusDevice *s = SYS_BUS_DEVICE(dev);
 
-		qdev_init_nofail(dev);
+		sysbus_realize_and_unref(s, &error_fatal);
 
 		MemoryRegion* dev_region = sysbus_mmio_get_region(s, 0);
 
@@ -710,7 +701,10 @@ void* modelprovider_create_internal_dev_default(char* name,
 void modelprovider_declare_external_dev(char* name, uint64_t base, uint64_t size) {
 	MemoryRegion* dev_region = g_new(MemoryRegion, 1);
 	memory_region_init_io(dev_region, NULL, &_qslave_ops, NULL, name, size);
-	memory_region_add_subregion_overlap(get_system_memory(), base, dev_region, -1);
+	if (strcmp(name, "Monitor0"))
+		memory_region_add_subregion_overlap(get_system_memory(), base, dev_region, -1);
+	else
+		memory_region_add_subregion_overlap(get_system_memory(), base, dev_region, 1);
 	dev_region->opaque=dev_region;
 }
 
@@ -756,23 +750,23 @@ void* modelprovider_create_internal_cpu(void *proxy, char* type, int index, uint
 
     modelprovider_cpu_register_stats(index);
 
-	object_property_set_link(cpuobj, OBJECT(get_system_memory()), "memory",
+	object_property_set_link(cpuobj, "memory", OBJECT(get_system_memory()),
 	                                 &error_abort);
-    object_property_set_bool(cpuobj, secure, "has_el3", NULL);
-    object_property_set_bool(cpuobj, secure, "has_el2", NULL);
-    object_property_set_int(cpuobj, start_pc, "rvbar", NULL);
-    object_property_set_int(cpuobj, arm_cpu_mp_affinity(index, 16), "mp-affinity", NULL);
-    object_property_set_bool(cpuobj, true, "pmu", NULL);
+    object_property_set_bool(cpuobj, "has_el3", secure, NULL);
+    object_property_set_bool(cpuobj, "has_el2", secure, NULL);
+    object_property_set_int(cpuobj, "rvbar", start_pc, NULL);
+    object_property_set_int(cpuobj, "mp-affinity", arm_cpu_mp_affinity(index, 16), NULL);
+    object_property_set_bool(cpuobj, "pmu", true, NULL);
 
-    object_property_set_bool(cpuobj, start_off, "start-powered-off", NULL);
+    object_property_set_bool(cpuobj, "start-powered-off", start_off, NULL);
 
     __qslave_show_cpu_function = qslave_aarch64_show;
     _icache_misses[index]=0;
 
-    object_property_set_int(cpuobj, (secure?
-        QEMU_PSCI_CONDUIT_DISABLED : QEMU_PSCI_CONDUIT_SMC), "psci-conduit", NULL);
+    object_property_set_int(cpuobj, "psci-conduit", (secure?
+        QEMU_PSCI_CONDUIT_DISABLED : QEMU_PSCI_CONDUIT_SMC), NULL);
 
-    object_property_set_bool(cpuobj, true, "realized", NULL);
+    object_property_set_bool(cpuobj, "realized", true, NULL);
     object_unref(cpuobj);
 
     return cs;
@@ -825,7 +819,7 @@ void qslave_ioaccess_busy_get_delay(uint32_t device, uint64_t* time_stamp, uint6
 
 OuterStatGetter __qslave_get_outer_stat_cb=NULL;
 static inline uint64_t GET_OUTER_STAT(int idx,enum OuterStat type) {if(idx>=0) return __qslave_get_outer_stat_cb(idx,type);
-else{ int i,k=0;for(i=0;i<smp_cpus;i++)k+=__qslave_get_outer_stat_cb(i,type); return k; }}
+else{ int i,k=0;for(i=0;i<current_machine->smp.cpus;i++)k+=__qslave_get_outer_stat_cb(i,type); return k; }}
 
 void modelprovider_register_outer_stat_cb(OuterStatGetter cb) {
 	__qslave_get_outer_stat_cb=cb;
@@ -881,7 +875,7 @@ uint64_t qslave_get_ld(int index) {
 	else {
 		int s=0;
 		int i;
-		for (i = 0; i < smp_cpus; i++)
+		for (i = 0; i < current_machine->smp.cpus; i++)
 			s+=qslave_stat_cpu[i].loads.v;
 		return s;
 	}
@@ -893,7 +887,7 @@ uint64_t qslave_get_st(int index) {
 	else {
 		int s=0;
 		int i;
-		for (i = 0; i < smp_cpus; i++)
+		for (i = 0; i < current_machine->smp.cpus; i++)
 			s+=qslave_stat_cpu[i].stores.v;
 		return s;
 	}
@@ -963,12 +957,11 @@ void modelprovider_post_init(MachineState *machine) {
 		__qslave_bootinfo.kernel_filename = machine->kernel_filename;
 		__qslave_bootinfo.kernel_cmdline = machine->kernel_cmdline;
 		__qslave_bootinfo.initrd_filename = machine->initrd_filename;
-		__qslave_bootinfo.nb_cpus = smp_cpus;
 		__qslave_bootinfo.board_id = -1;
 		__qslave_bootinfo.loader_start = _start_pcs[first_cpu->cpu_index];
 		__qslave_bootinfo.skip_dtb_autoload = false;
 		__qslave_bootinfo.firmware_loaded = false;
-		arm_load_kernel(ARM_CPU(first_cpu), &__qslave_bootinfo);
+		arm_load_kernel(ARM_CPU(first_cpu), machine, &__qslave_bootinfo);
 	}
 
 	if (__qslave_gicv3_handle || __qslave_gic_handle) {
@@ -988,12 +981,12 @@ void modelprovider_post_init(MachineState *machine) {
 			qdev_prop_set_uint32(gicdev, "len-redist-region-count",
 					n_redist);
 
-			int cpu_left=smp_cpus;
+			int cpu_left=current_machine->smp.cpus;
 			int reg;
 			for (reg = 0; reg < n_redist; reg++) {
 				unsigned redist0_capacity =
 						__qslave_gicv3_redists[reg].size / GICV3_REDIST_SIZE;
-				unsigned redist0_count = MIN(smp_cpus, redist0_capacity);
+				unsigned redist0_count = MIN(current_machine->smp.cpus, redist0_capacity);
 				char region_param[512];
 				sprintf(region_param, "redist-region-count[%d]", reg);
 				qdev_prop_set_uint32(gicdev, region_param, redist0_count);
@@ -1001,7 +994,7 @@ void modelprovider_post_init(MachineState *machine) {
 					cpu_left -= redist0_count;
 			}
 
-			qdev_init_nofail(gicdev);
+			sysbus_realize_and_unref(gicbusdev, &error_fatal);
 
 
 			sysbus_mmio_map(gicbusdev, 0, __qslave_gicv3_dist_base);
@@ -1011,7 +1004,7 @@ void modelprovider_post_init(MachineState *machine) {
 			}
 		}
 
-		for (i = 0; i < smp_cpus; i++) {
+		for (i = 0; i < current_machine->smp.cpus; i++) {
 			DeviceState *cpudev = DEVICE(qemu_get_cpu(i));
 			int ppibase = NUM_IRQS + i * GIC_INTERNAL + GIC_NR_SGIS;
 			int irq;
@@ -1032,7 +1025,7 @@ void modelprovider_post_init(MachineState *machine) {
 			if (gic_version == 2) {
 				qemu_irq irqc = qdev_get_gpio_in(gicdev,
 												ppibase + ARCH_GIC_MAINT_IRQ);
-				sysbus_connect_irq(gicbusdev, i + 4 * smp_cpus, irqc);
+				sysbus_connect_irq(gicbusdev, i + 4 * current_machine->smp.cpus, irqc);
 			} else {
 				qemu_irq irq = qdev_get_gpio_in(gicdev,
 												ppibase + ARCH_GIC_MAINT_IRQ);
@@ -1046,11 +1039,11 @@ void modelprovider_post_init(MachineState *machine) {
 														 + VIRTUAL_PMU_IRQ));
 
 			sysbus_connect_irq(gicbusdev, i, qdev_get_gpio_in(cpudev, ARM_CPU_IRQ));
-			sysbus_connect_irq(gicbusdev, i + smp_cpus,
+			sysbus_connect_irq(gicbusdev, i + current_machine->smp.cpus,
 							   qdev_get_gpio_in(cpudev, ARM_CPU_FIQ));
-			sysbus_connect_irq(gicbusdev, i + 2 * smp_cpus,
+			sysbus_connect_irq(gicbusdev, i + 2 * current_machine->smp.cpus,
 							   qdev_get_gpio_in(cpudev, ARM_CPU_VIRQ));
-			sysbus_connect_irq(gicbusdev, i + 3 * smp_cpus,
+			sysbus_connect_irq(gicbusdev, i + 3 * current_machine->smp.cpus,
 							   qdev_get_gpio_in(cpudev, ARM_CPU_VFIQ));
 		}
 
@@ -1071,15 +1064,14 @@ void modelprovider_post_init(MachineState *machine) {
 			const char *itsclass = its_class_name();
 			DeviceState *dev;
 
-			if (!itsclass) {
+			if (!strcmp(itsclass, "arm-gicv3-its")) {
 				return;
 			}
 
-			dev = qdev_create(NULL, itsclass);
+			dev = qdev_new(itsclass);
 
-			object_property_set_link(OBJECT(dev), OBJECT(gicdev), "parent-gicv3",
-									 &error_abort);
-			qdev_init_nofail(dev);
+			object_property_set_link(OBJECT(dev), "parent-gicv3", OBJECT(gicdev),&error_abort);
+			sysbus_realize_and_unref(SYS_BUS_DEVICE(dev), &error_fatal);
 			sysbus_mmio_map(SYS_BUS_DEVICE(dev), 0, __qslave_gicv3_dist_base+0x500000);
 		}
 	}
