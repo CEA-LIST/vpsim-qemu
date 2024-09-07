@@ -832,10 +832,19 @@ int qemu_main_loop(void)
     int status = EXIT_SUCCESS;
 
     while (!main_loop_should_exit(&status)) {
-        main_loop_wait(false);
+        main_loop_wait(true);
     }
 
     return status;
+}
+
+void modelprovider_poll_io(void) {
+    int status = EXIT_SUCCESS;
+	if (qslave_run_start)
+		current_cpu=NULL;
+	if (!main_loop_should_exit(&status)) {
+	    main_loop_wait(true);
+    }
 }
 
 void qemu_add_exit_notifier(Notifier *notify)

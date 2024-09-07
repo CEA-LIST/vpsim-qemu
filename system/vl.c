@@ -2710,12 +2710,6 @@ static bool qemu_machine_creation_done(Error **errp)
 
 void qmp_x_exit_preconfig(Error **errp)
 {
-    if (phase_check(PHASE_MACHINE_INITIALIZED)) {
-        error_setg(errp, "The command is permitted only before machine initialization");
-        return;
-    }
-
-    qemu_init_board();
     qemu_create_cli_devices();
     if (!qemu_machine_creation_done(errp)) {
         return;
@@ -3750,10 +3744,32 @@ void qemu_init(int argc, char **argv)
     }
 
     if (!preconfig_requested) {
+        if (phase_check(PHASE_MACHINE_INITIALIZED)) {
+            error_setg(&error_fatal, "The command is permitted only before machine initialization");
+            exit(1);
+        }
+
+        qemu_init_board();
+    }
+}
+
+void modelprovider_finalize_config(void) {
+	modelprovider_post_init(current_machine);
+    if (!preconfig_requested) {
         qmp_x_exit_preconfig(&error_fatal);
     }
     qemu_init_displays();
     accel_setup_post(current_machine);
     os_setup_post();
     resume_mux_open();
+#ifndef STANDALONE
+    qslave_run_start=true;
+    return;
+#endif
+    int status;
+
+    status = qemu_main_loop();
+    qemu_cleanup(status);
+
+    return;
 }

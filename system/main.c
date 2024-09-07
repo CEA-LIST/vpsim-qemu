@@ -25,6 +25,7 @@
 #include "qemu/osdep.h"
 #include "qemu-main.h"
 #include "sysemu/sysemu.h"
+#include "qslave.h"
 
 #ifdef CONFIG_SDL
 #include <SDL.h>
@@ -42,8 +43,12 @@ int qemu_default_main(void)
 
 int (*qemu_main)(void) = qemu_default_main;
 
+#ifndef STANDALONE
+int modelprovider_configure(int argc, char **argv, char **envp)
+#else
 int main(int argc, char **argv)
+#endif
 {
     qemu_init(argc, argv);
-    return qemu_main();
+    return 0;
 }

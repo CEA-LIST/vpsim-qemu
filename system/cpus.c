@@ -46,6 +46,7 @@
 #include "hw/boards.h"
 #include "hw/hw.h"
 #include "trace.h"
+#include "qslave.h"
 
 #ifdef CONFIG_LINUX
 
@@ -532,6 +533,11 @@ void bql_lock_impl(const char *file, int line)
 {
     QemuMutexLockFunc bql_lock_fn = qatomic_read(&bql_mutex_lock_func);
 
+    if (qslave_run_start) {
+        while (bql_locked()) {
+            modelprovider_wait_unlock();
+        }
+    }
     g_assert(!bql_locked());
     bql_lock_fn(&bql, file, line);
     set_bql_locked(true);
@@ -542,6 +548,9 @@ void bql_unlock(void)
     g_assert(bql_locked());
     set_bql_locked(false);
     qemu_mutex_unlock(&bql);
+    if (qslave_run_start) {
+        modelprovider_unlock();
+    }
 }
 
 void qemu_cond_wait_bql(QemuCond *cond)
@@ -682,10 +691,11 @@ void qemu_init_vcpu(CPUState *cpu)
     /* accelerators all implement the AccelOpsClass */
     g_assert(cpus_accel != NULL && cpus_accel->create_vcpu_thread != NULL);
     cpus_accel->create_vcpu_thread(cpu);
-
+#ifdef STANDALONE
     while (!cpu->created) {
         qemu_cond_wait(&qemu_cpu_cond, &bql);
     }
+#endif
 }
 
 void cpu_stop_current(void)

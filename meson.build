@@ -337,7 +337,7 @@ endforeach
 
 qemu_common_flags = [
   '-D_GNU_SOURCE', '-D_FILE_OFFSET_BITS=64', '-D_LARGEFILE_SOURCE',
-  '-fno-strict-aliasing', '-fno-common', '-fwrapv' ]
+  '-fno-strict-aliasing', '-fno-common', '-fwrapv', '-fPIC' ]
 qemu_cflags = []
 qemu_ldflags = []
 
@@ -422,9 +422,9 @@ endif
 
 qemu_common_flags = qemu_isa_flags + qemu_common_flags
 
-if get_option('prefer_static')
-  qemu_ldflags += get_option('b_pie') ? '-static-pie' : '-static'
-endif
+#if get_option('prefer_static')
+# qemu_ldflags += get_option('b_pie') ? '-static-pie' : '-static'
+#endif
 
 # Meson currently only handles pie as a boolean for now, so if the user
 # has explicitly disabled PIE we need to extend our cflags.
@@ -441,9 +441,9 @@ endif
 # instead, we can't add -no-pie because it overrides -shared: the linker then
 # tries to build an executable instead of a shared library and fails.  So
 # don't add -no-pie anywhere and cross fingers. :(
-if not get_option('b_pie')
-  qemu_common_flags += cc.get_supported_arguments('-fno-pie', '-no-pie')
-endif
+#if not get_option('b_pie')
+#  qemu_common_flags += cc.get_supported_arguments('-fno-pie', '-no-pie')
+#endif
 
 if not get_option('stack_protector').disabled()
   stack_protector_probe = '''
@@ -614,6 +614,8 @@ if get_option('fuzzing')
     fuzz_exe_ldflags = get_option('fuzzing_engine').split()
   endif
 endif
+
+qemu_ldflags += ['-shared','-Wl,-soname,libvpsim-qemu.so.9']
 
 if get_option('cfi')
   cfi_flags=[]

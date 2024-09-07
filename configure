@@ -272,7 +272,7 @@ cfi="false"
 # Meson has PIE as a boolean rather than enabled/disabled/auto,
 # and we also need to check for -static-pie before Meson runs
 # which requires knowing whether --static is enabled.
-pie=""
+pie="no"
 static="no"
 
 # Preferred compiler:
@@ -769,10 +769,10 @@ for opt do
   ;;
   --enable-bsd-user) bsd_user="yes"
   ;;
-  --enable-pie) pie="yes"
-  ;;
-  --disable-pie) pie="no"
-  ;;
+  #--enable-pie) pie="yes"
+  #;;
+  #--disable-pie) pie="no"
+  #;;
   --enable-cfi) cfi=true
   ;;
   --disable-cfi) cfi=false
@@ -1066,12 +1066,12 @@ if test "$tcg" = "disabled" ; then
   fi
   plugins="no"
 fi
-if test "$static" = "yes" ; then
-  if test "$plugins" = "yes"; then
-    error_exit "static and plugins are mutually incompatible"
-  fi
-  plugins="no"
-fi
+#if test "$static" = "yes" ; then
+#  if test "$plugins" = "yes"; then
+#    error_exit "static and plugins are mutually incompatible"
+#  fi
+#  plugins="no"
+#fi
 if test "$plugins" != "no" && test $host_bits -eq 64; then
     if has_meson_option "-Dtcg_interpreter=true"; then
         plugins="no"
@@ -1091,28 +1091,28 @@ static THREAD int tls_var;
 int main(void) { return tls_var; }
 EOF
 
-if test "$host_os" = windows || test "$host_os" = haiku; then
-  if test "$pie" = "yes"; then
-    error_exit "PIE not available due to missing OS support"
-  fi
-  pie=no
-fi
+#if test "$host_os" = windows || test "$host_os" = haiku; then
+#  if test "$pie" = "yes"; then
+#    error_exit "PIE not available due to missing OS support"
+#  fi
+#  pie=no
+#fi
 
-if test "$pie" != "no"; then
-  if test "$static" = "yes"; then
-    pie_ldflags=-static-pie
-  else
-    pie_ldflags=-pie
-  fi
-  if compile_prog "-Werror -fPIE -DPIE" "$pie_ldflags"; then
-    pie="yes"
-  elif test "$pie" = "yes"; then
-    error_exit "-static-pie not available due to missing toolchain support"
-  else
-    echo "Disabling PIE due to missing toolchain support"
-    pie="no"
-  fi
-fi
+#if test "$pie" != "no"; then
+#  if test "$static" = "yes"; then
+#    pie_ldflags=-static-pie
+#  else
+#    pie_ldflags=-pie
+#  fi
+#  if compile_prog "-Werror -fPIE -DPIE" "$pie_ldflags"; then
+#    pie="yes"
+#  elif test "$pie" = "yes"; then
+#    error_exit "-static-pie not available due to missing toolchain support"
+#  else
+#    echo "Disabling PIE due to missing toolchain support"
+#    pie="no"
+#  fi
+#fi
 
 ##########################################
 
@@ -1962,7 +1962,7 @@ if test "$skip_meson" = no; then
 
   test "$download" = "disabled" && meson_option_add "--wrap-mode=nodownload"
   test "$default_feature" = no && meson_option_add -Dauto_features=disabled
-  test "$static" = yes && meson_option_add -Dprefer_static=true
+  #test "$static" = yes && meson_option_add -Dprefer_static=true
   test "$pie" = no && meson_option_add -Db_pie=false
 
   # QEMU options
