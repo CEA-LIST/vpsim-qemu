@@ -25,6 +25,7 @@
 #include "qemu/osdep.h"
 #include "qemu-common.h"
 #include "sysemu/sysemu.h"
+#include "qslave.h"
 
 #ifdef CONFIG_SDL
 #if defined(__APPLE__) || defined(main)
@@ -44,11 +45,12 @@ int main(int argc, char **argv)
 #define main qemu_main
 #endif /* CONFIG_COCOA */
 
+#ifndef STANDALONE
+int modelprovider_configure(int argc, char **argv, char **envp)
+#else
 int main(int argc, char **argv, char **envp)
+#endif
 {
     qemu_init(argc, argv, envp);
-    qemu_main_loop();
-    qemu_cleanup();
-
     return 0;
 }

@@ -3,6 +3,7 @@
 
 #include "qemu/timer.h"
 #include "sysemu/accel-ops.h"
+#include "qslave.h"
 
 /* register accel-specific operations */
 void cpus_register_accel(const AccelOpsClass *i);
@@ -37,6 +38,8 @@ void pause_all_vcpus(void);
 void cpu_stop_current(void);
 
 extern int icount_align_option;
+
+extern __thread bool qslave_run_start;
 
 /* Unblock cpu */
 void qemu_cpu_kick_self(void);

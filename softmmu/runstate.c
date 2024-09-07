@@ -724,10 +724,18 @@ void qemu_main_loop(void)
 #ifdef CONFIG_PROFILER
         ti = profile_getclock();
 #endif
-        main_loop_wait(false);
+        main_loop_wait(true);
 #ifdef CONFIG_PROFILER
         dev_time += profile_getclock() - ti;
 #endif
+    }
+}
+
+void modelprovider_poll_io(void) {
+	if (qslave_run_start)
+		current_cpu=NULL;
+	if (!main_loop_should_exit()) {
+	    main_loop_wait(true);
     }
 }
 

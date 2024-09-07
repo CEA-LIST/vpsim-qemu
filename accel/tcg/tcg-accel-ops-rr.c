@@ -37,6 +37,8 @@
 #include "tcg-accel-ops-rr.h"
 #include "tcg-accel-ops-icount.h"
 
+#include "qslave.h"
+
 /* Kick all RR vCPUs */
 void rr_kick_vcpu_thread(CPUState *unused)
 {
@@ -103,13 +105,39 @@ static void rr_stop_kick_timer(void)
     }
 }
 
+static uint64_t qslave_since_last_sync=0;
+static uint64_t qslave_last_ts=0;
+
+static void qslave_yield_all(CPUState* cpu, uint64_t quantum, int wfi) {
+    qslave_since_last_sync += icount_get() - qslave_last_ts;
+    qslave_last_ts = icount_get();
+    if (!wfi) {
+        qslave_yield(cpu, qslave_since_last_sync, wfi);
+        qslave_since_last_sync=0;
+    }
+    else {
+        qslave_yield(cpu, 0, wfi);
+        current_cpu=cpu;
+    }
+}
+
 static void rr_wait_io_event(void)
 {
     CPUState *cpu;
 
+    cpu = first_cpu;
     while (all_cpu_threads_idle()) {
         rr_stop_kick_timer();
-        qemu_cond_wait_iothread(first_cpu->halt_cond);
+        if (qslave_run_start) {
+            qemu_mutex_unlock_iothread();
+            CPUState *tmp_cpu = current_cpu;
+            qslave_yield_all(cpu, 0, 1);
+            current_cpu = tmp_cpu;
+            qemu_mutex_lock_iothread();
+        }
+        else{
+            qemu_cond_wait_iothread(first_cpu->halt_cond);
+        }
     }
 
     rr_start_kick_timer();
@@ -169,8 +197,20 @@ static void *rr_cpu_thread_fn(void *arg)
 
     /* wait for initial kick-off after machine start */
     while (first_cpu->stopped) {
-        qemu_cond_wait_iothread(first_cpu->halt_cond);
+        if(!qslave_run_start)
+            qemu_cond_wait_iothread(first_cpu->halt_cond); // ORIGINAL qemu_cond_wait(first_cpu->halt_cond, &qemu_global_mutex);
+        else
+        {
+            current_cpu=first_cpu;
+            qemu_mutex_unlock_iothread();
+            CPUState *tmp_cpu = current_cpu;
+            qslave_yield_all(cpu, 0, 1);
+            current_cpu = tmp_cpu;
+            qemu_mutex_lock_iothread();
 
+            if (first_cpu->stopped)
+                continue;
+        }
         /* process any pending work */
         CPU_FOREACH(cpu) {
             current_cpu = cpu;
@@ -186,6 +226,11 @@ static void *rr_cpu_thread_fn(void *arg)
     cpu->exit_request = 1;
 
     while (1) {
+        if (!cpu) {
+            cpu = first_cpu;
+        }
+        current_cpu=cpu;
+        assert(current_cpu);
         qemu_mutex_unlock_iothread();
         replay_mutex_lock();
         qemu_mutex_lock_iothread();
@@ -201,10 +246,6 @@ static void *rr_cpu_thread_fn(void *arg)
         }
 
         replay_mutex_unlock();
-
-        if (!cpu) {
-            cpu = first_cpu;
-        }
 
         while (cpu && cpu_work_list_empty(cpu) && !cpu->exit_request) {
 
@@ -261,6 +302,9 @@ static void *rr_cpu_thread_fn(void *arg)
             qemu_notify_event();
         }
 
+        CPUState *tmp_cpu = current_cpu;
+        qslave_yield_all((cpu? cpu: first_cpu), 0, 0);
+        current_cpu = tmp_cpu;
         rr_wait_io_event();
         rr_deal_with_unplugged_cpus();
     }
@@ -268,6 +312,17 @@ static void *rr_cpu_thread_fn(void *arg)
     rcu_remove_force_rcu_notifier(&force_rcu);
     rcu_unregister_thread();
     return NULL;
+}
+
+static CPUState* __qslave_launch_cpu;
+
+void modelprovider_run_cpu(CPUState* cpu, uint64_t quantum) {
+	rr_cpu_thread_fn(__qslave_launch_cpu);
+}
+
+static void qslave_prepare_process(CPUState* cpu) {
+	__qslave_launch_cpu = cpu;
+	cpu->thread->thread = pthread_self();
 }
 
 void rr_start_vcpu_thread(CPUState *cpu)
@@ -286,9 +341,7 @@ void rr_start_vcpu_thread(CPUState *cpu)
 
         /* share a single thread for all cpus with TCG */
         snprintf(thread_name, VCPU_THREAD_NAME_SIZE, "ALL CPUs/TCG");
-        qemu_thread_create(cpu->thread, thread_name,
-                           rr_cpu_thread_fn,
-                           cpu, QEMU_THREAD_JOINABLE);
+        qslave_prepare_process(cpu);
 
         single_tcg_halt_cond = cpu->halt_cond;
         single_tcg_cpu_thread = cpu->thread;
