@@ -17,7 +17,7 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "qemu/osdep.h"
-
+#include "tcg/tcg.h"
 #include "exec/exec-all.h"
 #include "translate.h"
 #include "translate-a64.h"
@@ -25,6 +25,13 @@
 #include "arm_ldst.h"
 #include "semihosting/semihost.h"
 #include "cpregs.h"
+#include "qslave.h"
+
+unsigned long qslave_fp_instr = 0;
+unsigned long qslave_sve_instr = 0;
+unsigned long qslave_ldst_instr = 0;
+
+bool qslave_counter_enable = true;
 
 static TCGv_i64 cpu_X[32];
 static TCGv_i64 cpu_pc;
@@ -85,6 +92,33 @@ typedef struct AArch64DecodeTable {
     uint32_t mask;
     AArch64DecodeFn *disas_fn;
 } AArch64DecodeTable;
+
+void qslave_update_counter(CPUState *cpu)
+{
+    if (!qslave_counter_enable)
+        return;
+
+    qslave_stat_cpu[cpu->cpu_index].executed_fp_instructions.v += qslave_fp_instr;
+    qslave_stat_cpu[cpu->cpu_index].executed_sve_instructions.v += qslave_sve_instr;
+    qslave_stat_cpu[cpu->cpu_index].load_store.v += qslave_ldst_instr;
+    qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v += qslave_ldst_instr;
+    qslave_fp_instr = 0;
+    qslave_sve_instr = 0;
+    qslave_ldst_instr = 0;
+}
+
+void qslave_incr_counter(unsigned long * qslave_counter)
+{
+    if (!qslave_counter_enable)
+        return;
+
+    TCGv_ptr tmp = tcg_constant_ptr((tcg_target_long)qslave_counter);
+    TCGv tp = tcg_temp_new();
+
+    tcg_gen_ld_tl(tp,tmp,0);
+    tcg_gen_addi_tl(tp,tp,1);
+    tcg_gen_st_tl(tp,tmp,0);
+}
 
 /* initialize TCG globals.  */
 void a64_translate_init(void)
@@ -1263,6 +1297,7 @@ bool sve_access_check(DisasContext *s)
         return false;
     }
     s->sve_access_checked = 1;
+    qslave_incr_counter(&qslave_sve_instr);
     return fp_access_check(s);
 }
 
@@ -2948,6 +2983,7 @@ static bool trans_STXR(DisasContext *s, arg_stxr *a)
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
     }
     gen_store_exclusive(s, a->rs, a->rt, a->rt2, a->rn, a->sz, false);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -2960,6 +2996,7 @@ static bool trans_LDXR(DisasContext *s, arg_stxr *a)
     if (a->lasr) {
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -2986,6 +3023,7 @@ static bool trans_STLR(DisasContext *s, arg_stlr *a)
                                 true, a->rn != 31, memop);
     do_gpr_st(s, cpu_reg(s, a->rt), clean_addr, memop, true, a->rt,
               iss_sf, a->lasr);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3009,6 +3047,7 @@ static bool trans_LDAR(DisasContext *s, arg_stlr *a)
     do_gpr_ld(s, cpu_reg(s, a->rt), clean_addr, memop, false, true,
               a->rt, iss_sf, a->lasr);
     tcg_gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3021,6 +3060,7 @@ static bool trans_STXP(DisasContext *s, arg_stxr *a)
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
     }
     gen_store_exclusive(s, a->rs, a->rt, a->rt2, a->rn, a->sz, true);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3033,6 +3073,7 @@ static bool trans_LDXP(DisasContext *s, arg_stxr *a)
     if (a->lasr) {
         tcg_gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3068,6 +3109,7 @@ static bool trans_LD_lit(DisasContext *s, arg_ldlit *a)
     gen_pc_plus_diff(s, clean_addr, a->imm);
     do_gpr_ld(s, tcg_rt, clean_addr, memop,
               false, true, a->rt, iss_sf, false);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3084,6 +3126,7 @@ static bool trans_LD_lit_v(DisasContext *s, arg_ldlit *a)
     clean_addr = tcg_temp_new_i64();
     gen_pc_plus_diff(s, clean_addr, a->imm);
     do_fp_ld(s, a->rt, clean_addr, memop);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3159,6 +3202,7 @@ static bool trans_STP(DisasContext *s, arg_ldstpair *a)
         tcg_gen_qemu_st_i128(tmp, clean_addr, get_mem_index(s), mop);
     }
     op_addr_ldstpair_post(s, a, dirty_addr, offset);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3213,6 +3257,7 @@ static bool trans_LDP(DisasContext *s, arg_ldstpair *a)
         }
     }
     op_addr_ldstpair_post(s, a, dirty_addr, offset);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3233,6 +3278,7 @@ static bool trans_STP_v(DisasContext *s, arg_ldstpair *a)
     tcg_gen_addi_i64(clean_addr, clean_addr, 1 << a->sz);
     do_fp_st(s, a->rt2, clean_addr, mop);
     op_addr_ldstpair_post(s, a, dirty_addr, offset);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3253,6 +3299,7 @@ static bool trans_LDP_v(DisasContext *s, arg_ldstpair *a)
     tcg_gen_addi_i64(clean_addr, clean_addr, 1 << a->sz);
     do_fp_ld(s, a->rt2, clean_addr, mop);
     op_addr_ldstpair_post(s, a, dirty_addr, offset);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3309,6 +3356,7 @@ static bool trans_STGP(DisasContext *s, arg_ldstpair *a)
     }
 
     op_addr_ldstpair_post(s, a, dirty_addr, offset);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3358,6 +3406,7 @@ static bool trans_STR_i(DisasContext *s, arg_ldst_imm *a)
     do_gpr_st_memidx(s, tcg_rt, clean_addr, mop, memidx,
                      iss_valid, a->rt, iss_sf, false);
     op_addr_ldst_imm_post(s, a, dirty_addr, a->imm);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3376,6 +3425,7 @@ static bool trans_LDR_i(DisasContext *s, arg_ldst_imm *a)
     do_gpr_ld_memidx(s, tcg_rt, clean_addr, mop,
                      a->ext, memidx, iss_valid, a->rt, iss_sf, false);
     op_addr_ldst_imm_post(s, a, dirty_addr, a->imm);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3391,6 +3441,7 @@ static bool trans_STR_v_i(DisasContext *s, arg_ldst_imm *a)
     op_addr_ldst_imm_pre(s, a, &clean_addr, &dirty_addr, a->imm, true, mop);
     do_fp_st(s, a->rt, clean_addr, mop);
     op_addr_ldst_imm_post(s, a, dirty_addr, a->imm);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3406,6 +3457,7 @@ static bool trans_LDR_v_i(DisasContext *s, arg_ldst_imm *a)
     op_addr_ldst_imm_pre(s, a, &clean_addr, &dirty_addr, a->imm, false, mop);
     do_fp_ld(s, a->rt, clean_addr, mop);
     op_addr_ldst_imm_post(s, a, dirty_addr, a->imm);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3442,6 +3494,7 @@ static bool trans_LDR(DisasContext *s, arg_ldst *a)
     tcg_rt = cpu_reg(s, a->rt);
     do_gpr_ld(s, tcg_rt, clean_addr, memop,
               a->ext, true, a->rt, iss_sf, false);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3459,6 +3512,7 @@ static bool trans_STR(DisasContext *s, arg_ldst *a)
     op_addr_ldst_pre(s, a, &clean_addr, &dirty_addr, true, memop);
     tcg_rt = cpu_reg(s, a->rt);
     do_gpr_st(s, tcg_rt, clean_addr, memop, true, a->rt, iss_sf, false);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3478,6 +3532,7 @@ static bool trans_LDR_v(DisasContext *s, arg_ldst *a)
     memop = finalize_memop_asimd(s, a->sz);
     op_addr_ldst_pre(s, a, &clean_addr, &dirty_addr, false, memop);
     do_fp_ld(s, a->rt, clean_addr, memop);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3497,6 +3552,7 @@ static bool trans_STR_v(DisasContext *s, arg_ldst *a)
     memop = finalize_memop_asimd(s, a->sz);
     op_addr_ldst_pre(s, a, &clean_addr, &dirty_addr, true, memop);
     do_fp_st(s, a->rt, clean_addr, memop);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3580,6 +3636,7 @@ static bool trans_LDAPR(DisasContext *s, arg_LDAPR *a)
     do_gpr_ld(s, cpu_reg(s, a->rt), clean_addr, mop, false,
               true, a->rt, iss_sf, true);
     tcg_gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3624,6 +3681,7 @@ static bool trans_LDRA(DisasContext *s, arg_LDRA *a)
     if (a->w) {
         tcg_gen_mov_i64(cpu_reg_sp(s, a->rn), dirty_addr);
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3653,6 +3711,7 @@ static bool trans_LDAPR_i(DisasContext *s, arg_ldapr_stlr_i *a)
     do_gpr_ld(s, cpu_reg(s, a->rt), clean_addr, mop, a->ext, true,
               a->rt, iss_sf, true);
     tcg_gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3680,6 +3739,7 @@ static bool trans_STLR_i(DisasContext *s, arg_ldapr_stlr_i *a)
     /* Store-Release semantics */
     tcg_gen_mb(TCG_MO_ALL | TCG_BAR_STRL);
     do_gpr_st(s, cpu_reg(s, a->rt), clean_addr, mop, true, a->rt, iss_sf, true);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3771,6 +3831,7 @@ static bool trans_LD_mult(DisasContext *s, arg_ldst_mult *a)
             tcg_gen_add_i64(tcg_rn, tcg_rn, cpu_reg(s, a->rm));
         }
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3850,6 +3911,7 @@ static bool trans_ST_mult(DisasContext *s, arg_ldst_mult *a)
             tcg_gen_add_i64(tcg_rn, tcg_rn, cpu_reg(s, a->rm));
         }
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3890,6 +3952,7 @@ static bool trans_ST_single(DisasContext *s, arg_ldst_single *a)
             tcg_gen_add_i64(tcg_rn, tcg_rn, cpu_reg(s, a->rm));
         }
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3930,6 +3993,7 @@ static bool trans_LD_single(DisasContext *s, arg_ldst_single *a)
             tcg_gen_add_i64(tcg_rn, tcg_rn, cpu_reg(s, a->rm));
         }
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -3975,6 +4039,7 @@ static bool trans_LD_single_repl(DisasContext *s, arg_LD_single_repl *a)
             tcg_gen_add_i64(tcg_rn, tcg_rn, cpu_reg(s, a->rm));
         }
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -4008,6 +4073,7 @@ static bool trans_STZGM(DisasContext *s, arg_ldst_tag *a)
     clean_addr = clean_data_tbi(s, addr);
     tcg_gen_andi_i64(clean_addr, clean_addr, -size);
     gen_helper_dc_zva(tcg_env, clean_addr);
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -4040,6 +4106,7 @@ static bool trans_STGM(DisasContext *s, arg_ldst_tag *a)
         tcg_gen_andi_i64(clean_addr, clean_addr, -size);
         gen_probe_access(s, clean_addr, acc, size);
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -4074,6 +4141,7 @@ static bool trans_LDGM(DisasContext *s, arg_ldst_tag *a)
         /* The result tags are zeros.  */
         tcg_gen_movi_i64(tcg_rt, 0);
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -4117,6 +4185,7 @@ static bool trans_LDG(DisasContext *s, arg_ldst_tag *a)
         }
         tcg_gen_mov_i64(cpu_reg_sp(s, a->rn), addr);
     }
+    qslave_incr_counter(&qslave_ldst_instr);
     return true;
 }
 
@@ -11580,6 +11649,7 @@ static void disas_data_proc_simd(DisasContext *s, uint32_t insn)
 static void disas_data_proc_simd_fp(DisasContext *s, uint32_t insn)
 {
     if (extract32(insn, 28, 1) == 1 && extract32(insn, 30, 1) == 0) {
+        qslave_incr_counter(&qslave_fp_instr);
         disas_data_proc_fp(s, insn);
     } else {
         /* SIMD, including crypto */

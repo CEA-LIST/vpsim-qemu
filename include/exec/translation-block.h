@@ -91,6 +91,10 @@ struct TranslationBlock {
 
     struct tb_tc tc;
 
+    /* Flag indicating a hit when simulating an I-Cache */
+    int* icache_hit;
+    void* host_pc;
+
     /*
      * Track tb_page_addr_t intervals that intersect this TB.
      * For user-only, the virtual addresses are always contiguous,

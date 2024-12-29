@@ -900,7 +900,7 @@ static inline bool cpu_handle_interrupt(CPUState *cpu,
     return false;
 }
 
-static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
+static inline bool cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
                                     vaddr pc, TranslationBlock **last_tb,
                                     int *tb_exit)
 {
@@ -908,7 +908,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
     tb = cpu_tb_exec(cpu, tb, tb_exit);
     if (*tb_exit != TB_EXIT_REQUESTED) {
         *last_tb = tb;
-        return;
+        return false;
     }
 
     *last_tb = NULL;
@@ -920,14 +920,14 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
          * cpu_handle_interrupt.  cpu_handle_interrupt will also
          * clear cpu->icount_decr.u16.high.
          */
-        return;
+        return false;
     }
 
     /* Instruction counter expired.  */
     assert(icount_enabled());
 #ifndef CONFIG_USER_ONLY
     /* Ensure global icount has gone forward */
-    icount_update(cpu);
+    bool yield = icount_update(cpu);
     /* Refill decrementer and continue execution.  */
     int32_t insns_left = MIN(0xffff, cpu->icount_budget);
     cpu->neg.icount_decr.u16.low = insns_left;
@@ -943,6 +943,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
         assert(cpu->icount_extra == 0);
         cpu->cflags_next_tb = (tb->cflags & ~CF_COUNT_MASK) | insns_left;
     }
+    return yield;
 #endif
 }
 
@@ -1019,13 +1020,14 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                 tb_add_jump(last_tb, tb_exit, tb);
             }
 
-            cpu_loop_exec_tb(cpu, tb, pc, &last_tb, &tb_exit);
+            if (cpu_loop_exec_tb(cpu, tb, pc, &last_tb, &tb_exit))  goto yield;
 
             /* Try to align the host and virtual clocks
                if the guest is in advance */
             align_clocks(sc, cpu);
         }
     }
+yield:
     return ret;
 }
 

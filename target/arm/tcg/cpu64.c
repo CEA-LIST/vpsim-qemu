@@ -1095,6 +1095,9 @@ void aarch64_max_tcg_initfn(Object *obj)
      */
     unset_feature(&cpu->env, ARM_FEATURE_BACKCOMPAT_CNTFRQ);
 
+    memset(cpu->env.cp15.ev_last_reset, 0,
+        sizeof(cpu->env.cp15.ev_last_reset));
+
     /*
      * Reset MIDR so the guest doesn't mistake our 'max' CPU type for a real
      * one and try to apply errata workarounds or use impdef features we

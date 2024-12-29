@@ -24,6 +24,7 @@
 
 #include "../tcg-ldst.c.inc"
 #include "../tcg-pool.c.inc"
+#include "qslave.h"
 
 #ifdef CONFIG_DEBUG_TCG
 static const char * const tcg_target_reg_names[TCG_TARGET_NB_REGS] = {
@@ -2214,7 +2215,10 @@ static TCGLabelQemuLdst *prepare_host_addr(TCGContext *s, HostAddress *h,
                              TCG_REG_L1, TCG_REG_L0, cmp_ofs);
 
         /* jne slow_path */
-        tcg_out_opc(s, OPC_JCC_long + JCC_JNE, 0, 0, 0);
+        if (!qslave_mem_notify)
+            tcg_out_opc(s, OPC_JCC_long + JCC_JNE, 0, 0, 0);
+        else
+            tcg_out_opc(s, OPC_JMP_long, 0, 0, 0);
         ldst->label_ptr[0] = s->code_ptr;
         s->code_ptr += 4;
 
@@ -2224,7 +2228,10 @@ static TCGLabelQemuLdst *prepare_host_addr(TCGContext *s, HostAddress *h,
                                  TCG_REG_L0, cmp_ofs + 4);
 
             /* jne slow_path */
-            tcg_out_opc(s, OPC_JCC_long + JCC_JNE, 0, 0, 0);
+            if (!qslave_mem_notify)
+                tcg_out_opc(s, OPC_JCC_long + JCC_JNE, 0, 0, 0);
+            else
+                tcg_out_opc(s, OPC_JMP_long, 0, 0, 0);
             ldst->label_ptr[1] = s->code_ptr;
             s->code_ptr += 4;
         }
@@ -2243,7 +2250,10 @@ static TCGLabelQemuLdst *prepare_host_addr(TCGContext *s, HostAddress *h,
 
         /* jne slow_path */
         jcc = tcg_out_cmp(s, TCG_COND_TSTNE, addrlo, a_mask, true, false);
-        tcg_out_opc(s, OPC_JCC_long + jcc, 0, 0, 0);
+        if (!qslave_mem_notify)
+            tcg_out_opc(s, OPC_JCC_long + jcc, 0, 0, 0);
+        else
+            tcg_out_opc(s, OPC_JMP_long, 0, 0, 0);
         ldst->label_ptr[0] = s->code_ptr;
         s->code_ptr += 4;
     }

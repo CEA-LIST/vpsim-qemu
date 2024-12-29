@@ -329,6 +329,7 @@ TranslationBlock *tb_gen_code(CPUState *cpu,
     if (!(cflags & CF_PCREL)) {
         tb->pc = pc;
     }
+    tb->host_pc = host_pc;
     tb->cs_base = cs_base;
     tb->flags = flags;
     tb->cflags = cflags;

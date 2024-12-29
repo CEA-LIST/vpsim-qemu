@@ -47,6 +47,7 @@
 #endif
 #include "tcg/tcg-ldst.h"
 #include "tcg/oversized-guest.h"
+#include "qslave.h"
 
 /* DEBUG defines, enable DEBUG_TLB_LOG to log to the CPU_LOG_MMU target */
 /* #define DEBUG_TLB */
@@ -1384,6 +1385,10 @@ static int probe_access_internal(CPUState *cpu, vaddr addr,
             flags &= ~TLB_INVALID_MASK;
         }
         tlb_addr = tlb_read_idx(entry, access_type);
+        if (qslave_counter_enable) {
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
+        }
     }
     flags &= tlb_addr;
 
@@ -1652,6 +1657,10 @@ static bool mmu_lookup1(CPUState *cpu, MMULookupPageData *data, MemOp memop,
             entry = tlb_entry(cpu, mmu_idx, addr);
         }
         tlb_addr = tlb_read_idx(entry, access_type) & ~TLB_INVALID_MASK;
+        if (qslave_counter_enable) {
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
+        }
     }
 
     full = &cpu->neg.tlb.d[mmu_idx].fulltlb[index];
@@ -1826,6 +1835,10 @@ static void *atomic_mmu_lookup(CPUState *cpu, vaddr addr, MemOpIdx oi,
             tlbe = tlb_entry(cpu, mmu_idx, addr);
         }
         tlb_addr = tlb_addr_write(tlbe) & ~TLB_INVALID_MASK;
+        if (qslave_counter_enable) {
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
+        }
     }
 
     /*
@@ -2154,6 +2167,9 @@ static uint64_t do_ld_beN(CPUState *cpu, MMULookupPageData *p,
                               mmu_idx, type, ra);
     }
 
+    if (qslave_mem_notify) {
+        qslave_mem_notify(0, p->haddr, p->addr, p->size);
+    }
     /*
      * It is a given that we cross a page and therefore there is no
      * atomicity for the load as a whole, but subobjects may need attention.
@@ -2203,6 +2219,9 @@ static Int128 do_ld16_beN(CPUState *cpu, MMULookupPageData *p,
         return do_ld16_mmio_beN(cpu, p->full, a, p->addr, size, mmu_idx, ra);
     }
 
+    if (qslave_mem_notify) {
+        qslave_mem_notify(0, p->haddr, p->addr, size);
+    }
     /*
      * It is a given that we cross a page and therefore there is no
      * atomicity for the load as a whole, but subobjects may need attention.
@@ -2247,6 +2266,9 @@ static uint8_t do_ld_1(CPUState *cpu, MMULookupPageData *p, int mmu_idx,
     if (unlikely(p->flags & TLB_MMIO)) {
         return do_ld_mmio_beN(cpu, p->full, 0, p->addr, 1, mmu_idx, type, ra);
     } else {
+        if (qslave_mem_notify) {
+            qslave_mem_notify(0, p->haddr, p->addr, 1);
+        }
         return *(uint8_t *)p->haddr;
     }
 }
@@ -2266,6 +2288,9 @@ static uint16_t do_ld_2(CPUState *cpu, MMULookupPageData *p, int mmu_idx,
         ret = load_atom_2(cpu, ra, p->haddr, memop);
         if (memop & MO_BSWAP) {
             ret = bswap16(ret);
+        }
+        if (qslave_mem_notify) {
+            qslave_mem_notify(0, p->haddr, p->addr, 2);
         }
     }
     return ret;
@@ -2287,6 +2312,9 @@ static uint32_t do_ld_4(CPUState *cpu, MMULookupPageData *p, int mmu_idx,
         if (memop & MO_BSWAP) {
             ret = bswap32(ret);
         }
+        if (qslave_mem_notify) {
+            qslave_mem_notify(0, p->haddr, p->addr, 4);
+        }
     }
     return ret;
 }
@@ -2306,6 +2334,9 @@ static uint64_t do_ld_8(CPUState *cpu, MMULookupPageData *p, int mmu_idx,
         ret = load_atom_8(cpu, ra, p->haddr, memop);
         if (memop & MO_BSWAP) {
             ret = bswap64(ret);
+        }
+        if (qslave_mem_notify) {
+            qslave_mem_notify(0, p->haddr, p->addr, 8);
         }
     }
     return ret;
@@ -2414,6 +2445,9 @@ static Int128 do_ld16_mmu(CPUState *cpu, vaddr addr,
             ret = load_atom_16(cpu, ra, l.page[0].haddr, l.memop);
             if (l.memop & MO_BSWAP) {
                 ret = bswap128(ret);
+            }
+            if (qslave_mem_notify) {
+                qslave_mem_notify(0, l.page[0].haddr, l.page[0].addr, 16);
             }
         }
         return ret;
@@ -2564,6 +2598,9 @@ static uint64_t do_st_leN(CPUState *cpu, MMULookupPageData *p,
         return val_le >> (p->size * 8);
     }
 
+    if (qslave_mem_notify) {
+        qslave_mem_notify(1, p->haddr , p->addr, p->size);
+    }
     /*
      * It is a given that we cross a page and therefore there is no atomicity
      * for the store as a whole, but subobjects may need attention.
@@ -2618,6 +2655,9 @@ static uint64_t do_st16_leN(CPUState *cpu, MMULookupPageData *p,
         return int128_gethi(val_le) >> ((size - 8) * 8);
     }
 
+    if (qslave_mem_notify) {
+        qslave_mem_notify(1, p->haddr , p->addr, size);
+    }
     /*
      * It is a given that we cross a page and therefore there is no atomicity
      * for the store as a whole, but subobjects may need attention.
@@ -2662,6 +2702,9 @@ static void do_st_1(CPUState *cpu, MMULookupPageData *p, uint8_t val,
         /* nothing */
     } else {
         *(uint8_t *)p->haddr = val;
+        if (qslave_mem_notify) {
+            qslave_mem_notify(1, p->haddr , p->addr, 1);
+        }
     }
 }
 
@@ -2681,6 +2724,9 @@ static void do_st_2(CPUState *cpu, MMULookupPageData *p, uint16_t val,
             val = bswap16(val);
         }
         store_atom_2(cpu, ra, p->haddr, memop, val);
+        if (qslave_mem_notify) {
+            qslave_mem_notify(1, p->haddr , p->addr, 2);
+        }
     }
 }
 
@@ -2700,6 +2746,9 @@ static void do_st_4(CPUState *cpu, MMULookupPageData *p, uint32_t val,
             val = bswap32(val);
         }
         store_atom_4(cpu, ra, p->haddr, memop, val);
+        if (qslave_mem_notify) {
+            qslave_mem_notify(1, p->haddr , p->addr, 4);
+        }
     }
 }
 
@@ -2719,6 +2768,9 @@ static void do_st_8(CPUState *cpu, MMULookupPageData *p, uint64_t val,
             val = bswap64(val);
         }
         store_atom_8(cpu, ra, p->haddr, memop, val);
+        if (qslave_mem_notify) {
+            qslave_mem_notify(1, p->haddr , p->addr, 8);
+        }
     }
 }
 
@@ -2824,6 +2876,9 @@ static void do_st16_mmu(CPUState *cpu, vaddr addr, Int128 val,
                 val = bswap128(val);
             }
             store_atom_16(cpu, ra, l.page[0].haddr, l.memop, val);
+            if (qslave_mem_notify) {
+                qslave_mem_notify(1, l.page[0].haddr , l.page[0].addr, 16);
+            }
         }
         return;
     }

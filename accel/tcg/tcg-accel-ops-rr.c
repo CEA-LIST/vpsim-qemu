@@ -38,6 +38,10 @@
 #include "tcg-accel-ops-icount.h"
 #include "qslave.h"
 
+extern void qslave_update_counter(CPUState * cpu);
+extern uint64_t __qslave_current_warp;
+extern bool __qslave_current_warp_initialized;
+
 /* Kick all RR vCPUs */
 void rr_kick_vcpu_thread(CPUState *unused)
 {
@@ -281,6 +285,8 @@ static void *rr_cpu_thread_fn(void *arg)
 
         replay_mutex_unlock();
 
+        __qslave_current_warp = 0;
+        __qslave_current_warp_initialized=false;
         while (cpu && cpu_work_list_empty(cpu) && !cpu->exit_request) {
             /* Store rr_current_cpu before evaluating cpu_can_run().  */
             qatomic_set_mb(&rr_current_cpu, cpu);
@@ -301,6 +307,7 @@ static void *rr_cpu_thread_fn(void *arg)
                 if (icount_enabled()) {
                     icount_process_data(cpu);
                 }
+                qslave_update_counter(cpu);
                 bql_lock();
 
                 if (r == EXCP_DEBUG) {
