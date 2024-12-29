@@ -55,7 +55,7 @@ extern MainMemCbInternal qslave_mem_notify;
 extern MainMemCb qslave_mem_notify_model;
 extern ICacheMissCb qslave_icache_miss_cb;
 extern AddVictimCb qslave_add_victim_cb;
-extern int qslave_counter_enable;
+extern bool qslave_counter_enable;
 
 void qslave_icache_miss(uint64_t addr, unsigned size, int* tb_hit_flag);
 

@@ -37,6 +37,13 @@
 
 #include "translate-a64.h"
 #include "qemu/atomic128.h"
+#include "qslave.h"
+
+unsigned long qslave_fp_instr = 0;
+unsigned long qslave_sve_instr = 0;
+unsigned long qslave_ldst_instr = 0;
+
+bool qslave_counter_enable = true;
 
 static TCGv_i64 cpu_X[32];
 static TCGv_i64 cpu_pc;
@@ -68,6 +75,36 @@ typedef struct AArch64DecodeTable {
     uint32_t mask;
     AArch64DecodeFn *disas_fn;
 } AArch64DecodeTable;
+
+void qslave_update_counter(CPUState *cpu)
+{
+    if (!qslave_counter_enable)
+        return;
+
+    qslave_stat_cpu[cpu->cpu_index].executed_fp_instructions.v += qslave_fp_instr;
+    qslave_stat_cpu[cpu->cpu_index].executed_sve_instructions.v += qslave_sve_instr;
+    qslave_stat_cpu[cpu->cpu_index].load_store.v += qslave_ldst_instr;
+    qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v += qslave_ldst_instr;
+    qslave_fp_instr = 0;
+    qslave_sve_instr = 0;
+    qslave_ldst_instr = 0;
+}
+
+void qslave_incr_counter(unsigned long * qslave_counter)
+{
+    if (!qslave_counter_enable)
+        return;
+
+    TCGv_ptr tmp = tcg_const_ptr((tcg_target_long)qslave_counter);
+    TCGv tp = tcg_temp_new();
+
+    tcg_gen_ld_tl(tp,tmp,0);
+    tcg_gen_addi_tl(tp,tp,1);
+    tcg_gen_st_tl(tp,tmp,0);
+
+    tcg_temp_free(tp);
+    tcg_temp_free_ptr(tmp);
+}
 
 /* initialize TCG globals.  */
 void a64_translate_init(void)
@@ -1198,6 +1235,7 @@ bool sve_access_check(DisasContext *s)
         return false;
     }
     s->sve_access_checked = true;
+    qslave_incr_counter(&qslave_sve_instr);
     return fp_access_check(s);
 }
 
@@ -14561,6 +14599,7 @@ static void disas_data_proc_simd(DisasContext *s, uint32_t insn)
 static void disas_data_proc_simd_fp(DisasContext *s, uint32_t insn)
 {
     if (extract32(insn, 28, 1) == 1 && extract32(insn, 30, 1) == 0) {
+        qslave_incr_counter(&qslave_fp_instr);
         disas_data_proc_fp(s, insn);
     } else {
         /* SIMD, including crypto */
@@ -14866,6 +14905,7 @@ static void aarch64_tr_translate_insn(DisasContextBase *dcbase, CPUState *cpu)
     case 0x6:
     case 0xc:
     case 0xe:      /* Loads and stores */
+        qslave_incr_counter(&qslave_ldst_instr);
         disas_ldst(s, insn);
         break;
     case 0x5:

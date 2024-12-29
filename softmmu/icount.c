@@ -41,6 +41,10 @@
 #include "sysemu/cpu-throttle.h"
 #include "timers-state.h"
 
+uint64_t __qslave_current_warp;
+uint64_t __qslave_current_warp_cpu[MAX_CPUS];
+bool __qslave_current_warp_initialized=false;
+
 /*
  * ICOUNT: Instruction Counter
  *
@@ -84,13 +88,33 @@ static int64_t icount_get_executed(CPUState *cpu)
  * account executed instructions. This is done by the TCG vCPU
  * thread so the main-loop can see time has moved forward.
  */
-static void icount_update_locked(CPUState *cpu)
+static bool icount_update_locked(CPUState *cpu)
 {
     int64_t executed = icount_get_executed(cpu);
     cpu->icount_budget -= executed;
 
+    qslave_stat_cpu[cpu->cpu_index].executed_instructions.v+=executed;
+    if (!__qslave_current_warp_initialized) {
+        qslave_fill_biases(__qslave_current_warp_cpu);
+        __qslave_current_warp_initialized=true;
+    }
+    __qslave_current_warp_cpu[cpu->cpu_index] += executed;
+
+    if (__qslave_current_warp_cpu[cpu->cpu_index] > __qslave_current_warp) {
+        qatomic_set_i64(&timers_state.qemu_icount_bias,
+                               timers_state.qemu_icount_bias +
+                               (__qslave_current_warp_cpu[cpu->cpu_index] -
+                                       __qslave_current_warp));
+        __qslave_current_warp=__qslave_current_warp_cpu[cpu->cpu_index];
+    }
     qatomic_set_i64(&timers_state.qemu_icount,
                     timers_state.qemu_icount + executed);
+    qatomic_set_i64(&timers_state.qemu_icount_bias,
+                       timers_state.qemu_icount_bias - executed);
+    if (__qslave_current_warp_cpu[cpu->cpu_index] >= 0xffff) { 
+        return true;
+    }
+    return false;
 }
 
 /*
@@ -98,13 +122,14 @@ static void icount_update_locked(CPUState *cpu)
  * account executed instructions. This is done by the TCG vCPU
  * thread so the main-loop can see time has moved forward.
  */
-void icount_update(CPUState *cpu)
+bool icount_update(CPUState *cpu)
 {
     seqlock_write_lock(&timers_state.vm_clock_seqlock,
                        &timers_state.vm_clock_lock);
-    icount_update_locked(cpu);
+    bool quantum_exceeded = icount_update_locked(cpu);
     seqlock_write_unlock(&timers_state.vm_clock_seqlock,
                          &timers_state.vm_clock_lock);
+    return quantum_exceeded;
 }
 
 static int64_t icount_get_raw_locked(void)

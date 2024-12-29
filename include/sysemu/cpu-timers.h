@@ -35,7 +35,7 @@ extern int use_icount;
  * Update the icount with the executed instructions. Called by
  * cpus-tcg vCPU thread so the main-loop can see time has moved forward.
  */
-void icount_update(CPUState *cpu);
+bool icount_update(CPUState *cpu);
 
 /* get raw icount value */
 int64_t icount_get_raw(void);
