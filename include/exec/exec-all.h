@@ -492,6 +492,10 @@ struct TranslationBlock {
 
     struct tb_tc tc;
 
+    /* Flag indicating a hit when simulating an I-Cache */
+    int* icache_hit;
+    void* host_pc;
+    
     /* first and second physical page containing code. The lower bit
        of the pointer tells the index in page_next[].
        The list is protected by the TB's page('s) lock(s) */

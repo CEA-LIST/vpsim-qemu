@@ -6,7 +6,7 @@
 
 int use_icount;
 
-void icount_update(CPUState *cpu)
+bool icount_update(CPUState *cpu)
 {
     abort();
 }

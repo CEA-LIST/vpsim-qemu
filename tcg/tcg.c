@@ -4325,6 +4325,13 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb)
 #endif
                 s->gen_insn_data[num_insns][i] = a;
             }
+            if (qslave_icache_miss_cb && num_insns == 0) {
+            	tb->icache_hit=0;
+            	tcg_out_movi(s, TCG_TYPE_PTR, tcg_target_call_iarg_regs[0], (target_ulong) tb->host_pc);
+				tcg_out_movi(s, TCG_TYPE_I32, tcg_target_call_iarg_regs[1], tb->size);
+				tcg_out_movi(s, TCG_TYPE_PTR, tcg_target_call_iarg_regs[2],  (uint64_t) &tb->icache_hit);
+				tcg_out_call(s, (uint8_t*) qslave_icache_miss);
+            }
             break;
         case INDEX_op_discard:
             temp_dead(s, arg_temp(op->args[0]));

@@ -40,6 +40,7 @@
 #include "qemu/plugin-memory.h"
 #endif
 #include "tcg/tcg-ldst.h"
+#include "qslave.h"
 
 /* DEBUG defines, enable DEBUG_TLB_LOG to log to the CPU_LOG_MMU target */
 /* #define DEBUG_TLB */
@@ -1587,6 +1588,8 @@ static int probe_access_internal(CPUArchState *env, target_ulong addr,
     size_t elt_ofs;
     int flags;
 
+    CPUState *cpu = env_cpu(env);
+
     switch (access_type) {
     case MMU_DATA_LOAD:
         elt_ofs = offsetof(CPUTLBEntry, addr_read);
@@ -1604,6 +1607,8 @@ static int probe_access_internal(CPUArchState *env, target_ulong addr,
 
     page_addr = addr & TARGET_PAGE_MASK;
     if (!tlb_hit_page(tlb_addr, page_addr)) {
+        qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+        qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
         if (!victim_tlb_hit(env, mmu_idx, index, elt_ofs, page_addr)) {
             CPUState *cs = env_cpu(env);
             CPUClass *cc = CPU_GET_CLASS(cs);
@@ -1920,6 +1925,7 @@ load_helper(CPUArchState *env, target_ulong addr, MemOpIdx oi,
     void *haddr;
     uint64_t res;
     size_t size = memop_size(op);
+    CPUState *cpu = env_cpu(env);
 
     /* Handle CPU specific unaligned behaviour */
     if (addr & ((1 << a_bits) - 1)) {
@@ -1938,6 +1944,10 @@ load_helper(CPUArchState *env, target_ulong addr, MemOpIdx oi,
         }
         tlb_addr = code_read ? entry->addr_code : entry->addr_read;
         tlb_addr &= ~TLB_INVALID_MASK;
+        if (qslave_counter_enable) {
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
+        }
     }
 
     /* Handle anything that isn't just a straight memory access.  */
@@ -1968,6 +1978,10 @@ load_helper(CPUArchState *env, target_ulong addr, MemOpIdx oi,
         }
 
         haddr = (void *)((uintptr_t)addr + entry->addend);
+
+        if (qslave_mem_notify) {
+            qslave_mem_notify(0, haddr, addr, size);//not write
+        }
 
         /*
          * Keep these two load_memop separate to ensure that the compiler
@@ -2005,6 +2019,11 @@ load_helper(CPUArchState *env, target_ulong addr, MemOpIdx oi,
     }
 
     haddr = (void *)((uintptr_t)addr + entry->addend);
+
+    if (qslave_mem_notify) {
+		qslave_mem_notify(0, haddr, addr, size);//not write
+    }
+
     return load_memop(haddr, op);
 }
 
@@ -2318,6 +2337,7 @@ store_helper(CPUArchState *env, target_ulong addr, uint64_t val,
     unsigned a_bits = get_alignment_bits(get_memop(oi));
     void *haddr;
     size_t size = memop_size(op);
+    CPUState *cpu = env_cpu(env);
 
     /* Handle CPU specific unaligned behaviour */
     if (addr & ((1 << a_bits) - 1)) {
@@ -2335,6 +2355,10 @@ store_helper(CPUArchState *env, target_ulong addr, uint64_t val,
             entry = tlb_entry(env, mmu_idx, addr);
         }
         tlb_addr = tlb_addr_write(entry) & ~TLB_INVALID_MASK;
+        if (qslave_counter_enable) {
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_miss.v += 1;
+            qslave_stat_cpu[cpu->cpu_index].count_tlb_hit.v -= 1;
+        }
     }
 
     /* Handle anything that isn't just a straight memory access.  */
@@ -2377,6 +2401,10 @@ store_helper(CPUArchState *env, target_ulong addr, uint64_t val,
 
         haddr = (void *)((uintptr_t)addr + entry->addend);
 
+        if (qslave_mem_notify) {// && !generating_tb
+            qslave_mem_notify(1, haddr, addr, size);//write
+        }
+
         /*
          * Keep these two store_memop separate to ensure that the compiler
          * is able to fold the entire function to a single instruction.
@@ -2401,6 +2429,11 @@ store_helper(CPUArchState *env, target_ulong addr, uint64_t val,
     }
 
     haddr = (void *)((uintptr_t)addr + entry->addend);
+
+    if (qslave_mem_notify) {
+		qslave_mem_notify(1, haddr, addr, size);//write
+	}
+
     store_memop(haddr, val, op);
 }
 

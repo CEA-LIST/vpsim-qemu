@@ -749,6 +749,8 @@ static void aarch64_max_initfn(Object *obj)
     /* '-cpu max' for TCG: we currently do this as "A57 with extra things" */
 
     aarch64_a57_initfn(obj);
+    memset(cpu->env.cp15.ev_last_reset, 0,
+        		sizeof(cpu->env.cp15.ev_last_reset));
 
     /*
      * Reset MIDR so the guest doesn't mistake our 'max' CPU type for a real

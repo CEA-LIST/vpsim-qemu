@@ -956,12 +956,110 @@ static bool instructions_supported(CPUARMState *env)
 
 static uint64_t instructions_get_count(CPUARMState *env)
 {
-    return (uint64_t)icount_get_raw();
+    CPUState *cpu = env_cpu(env);
+    return qslave_get_inst_count(cpu->cpu_index);
 }
 
 static int64_t instructions_ns_per(uint64_t icount)
 {
     return icount_to_ns((int64_t)icount);
+}
+
+// Q-SLAVE enabled cache hierarchy events
+static bool qslave_events_supported(CPUARMState* env) {
+	return qslave_mem_notify != NULL;
+}
+
+// caches and mem
+static uint64_t l1dcache_refill_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_l1_miss(cpu->cpu_index);
+}
+
+static int64_t l1dcache_refill_ns_per(uint64_t val)
+{
+	// worst case, every instruction will be a miss
+    return icount_to_ns((int64_t)val);
+}
+
+static uint64_t l2dcache_refill_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_l2_miss(cpu->cpu_index);
+}
+
+static int64_t l2dcache_refill_ns_per(uint64_t val)
+{
+	// worst case, every instruction will be a miss
+    return icount_to_ns((int64_t)val);
+}
+
+static uint64_t l1dcache_wb_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_l1_wb(cpu->cpu_index);
+}
+
+static int64_t l1dcache_wb_ns_per(uint64_t val)
+{
+	// worst case, every instruction
+    return icount_to_ns((int64_t)val);
+}
+
+static uint64_t l2dcache_wb_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_l2_wb(cpu->cpu_index);
+}
+
+static int64_t l2dcache_wb_ns_per(uint64_t val)
+{
+	// worst case, every instruction
+    return icount_to_ns((int64_t)val);
+}
+
+static uint64_t mem_access_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_ld(cpu->cpu_index)
+			+ qslave_get_st(cpu->cpu_index);
+}
+
+static int64_t mem_access_ns_per(uint64_t val)
+{
+	// worst case, every instruction will be a mem access
+    return icount_to_ns((int64_t)val);
+}
+
+static uint64_t l1dcache_access_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_l1_st(cpu->cpu_index)
+			+ qslave_get_l1_ld(cpu->cpu_index);
+}
+
+static int64_t l1dcache_access_ns_per(uint64_t val)
+{
+	// worst case, every instruction
+    return icount_to_ns((int64_t)val);
+}
+
+static uint64_t l2dcache_access_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_l2_st(cpu->cpu_index)
+			+ qslave_get_l2_ld(cpu->cpu_index);
+}
+
+static int64_t l2dcache_access_ns_per(uint64_t val)
+{
+	// worst case, every instruction
+    return icount_to_ns((int64_t)val);
+}
+
+static uint64_t l1icache_refill_get_count(CPUARMState* env) {
+	CPUState *cpu = env_cpu(env);
+	return qslave_get_icache_misses(cpu->cpu_index);
+}
+
+static int64_t l1icache_refill_ns_per(uint64_t val)
+{
+	// worst case, every instruction
+    return icount_to_ns((int64_t)val);
 }
 #endif
 
@@ -1005,6 +1103,46 @@ static const pm_event pm_events[] = {
       .supported = event_always_supported,
       .get_count = cycles_get_count,
       .ns_per_count = cycles_ns_per,
+    },
+    { .number = 0x003, // L1D_CACHE_REFILL
+      .supported = qslave_events_supported,
+      .get_count = l1dcache_refill_get_count,
+      .ns_per_count = l1dcache_refill_ns_per,
+    },
+    { .number = 0x004, // L1D_CACHE
+      .supported = qslave_events_supported,
+      .get_count = l1dcache_access_get_count,
+      .ns_per_count = l1dcache_access_ns_per,
+    },
+    { .number = 0x013, // MEM_ACCESS
+      .supported = qslave_events_supported,
+      .get_count = mem_access_get_count,
+      .ns_per_count = mem_access_ns_per,
+    },
+    { .number = 0x015, // L1D_CACHE_WB
+      .supported = qslave_events_supported,
+      .get_count = l1dcache_wb_get_count,
+      .ns_per_count = l1dcache_wb_ns_per,
+    },
+    { .number = 0x016, // L2D_CACHE
+      .supported = qslave_events_supported,
+      .get_count = l2dcache_access_get_count,
+      .ns_per_count = l2dcache_access_ns_per,
+    },
+    { .number = 0x017, // L2D_CACHE_REFILL
+      .supported = qslave_events_supported,
+      .get_count = l2dcache_refill_get_count,
+      .ns_per_count = l2dcache_refill_ns_per,
+    },
+    { .number = 0x018, // L2D_CACHE_WB
+      .supported = qslave_events_supported,
+      .get_count = l2dcache_wb_get_count,
+      .ns_per_count = l2dcache_wb_ns_per,
+    },
+    { .number = 0x001, // L1I_CACHE_REFILL
+      .supported = qslave_events_supported,
+      .get_count = l1icache_refill_get_count,
+      .ns_per_count = l1icache_refill_ns_per,
     },
 #endif
     { .number = 0x023, /* STALL_FRONTEND */

@@ -39,6 +39,10 @@
 
 #include "qslave.h"
 
+extern void qslave_update_counter(CPUState * cpu);
+extern uint64_t __qslave_current_warp;
+extern bool __qslave_current_warp_initialized;
+
 /* Kick all RR vCPUs */
 void rr_kick_vcpu_thread(CPUState *unused)
 {
@@ -198,7 +202,7 @@ static void *rr_cpu_thread_fn(void *arg)
     /* wait for initial kick-off after machine start */
     while (first_cpu->stopped) {
         if(!qslave_run_start)
-            qemu_cond_wait_iothread(first_cpu->halt_cond); // ORIGINAL qemu_cond_wait(first_cpu->halt_cond, &qemu_global_mutex);
+            qemu_cond_wait_iothread(first_cpu->halt_cond);
         else
         {
             current_cpu=first_cpu;
@@ -247,6 +251,8 @@ static void *rr_cpu_thread_fn(void *arg)
 
         replay_mutex_unlock();
 
+        __qslave_current_warp = 0;
+        __qslave_current_warp_initialized=false;
         while (cpu && cpu_work_list_empty(cpu) && !cpu->exit_request) {
 
             qatomic_mb_set(&rr_current_cpu, cpu);
@@ -266,6 +272,7 @@ static void *rr_cpu_thread_fn(void *arg)
                 if (icount_enabled()) {
                     icount_process_data(cpu);
                 }
+                qslave_update_counter(cpu);
                 qemu_mutex_lock_iothread();
 
                 if (r == EXCP_DEBUG) {

@@ -417,6 +417,7 @@ typedef struct CPUArchState {
         uint64_t c9_pmuserenr; /* perf monitor user enable */
         uint64_t c9_pmselr; /* perf monitor counter selection register */
         uint64_t c9_pminten; /* perf monitor interrupt enables */
+        uint64_t ev_last_reset[32]; /* for reset implementation */
         union { /* Memory attribute redirection */
             struct {
 #ifdef HOST_WORDS_BIGENDIAN
