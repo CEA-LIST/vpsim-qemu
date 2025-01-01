@@ -630,6 +630,11 @@ void modelprovider_register_main_mem_callback(MainMemCb cb) {
 	qslave_mem_notify=_qslave_mem_notify_functor;
 }
 
+void modelprovider_unregister_main_mem_callback(void) {
+	qslave_mem_notify_model=NULL;
+	qslave_mem_notify=NULL;
+}
+
 ICacheMissCb qslave_icache_miss_cb=NULL;
 
 static uint64_t _icache_misses[MAX_CPUS];
