@@ -108,6 +108,7 @@ void modelprovider_set_default_write_callback(WriteCb cb);
 void modelprovider_set_sync_callback(SyncCb cb);
 uint64_t modelprovider_get_start_pc(int index);
 void modelprovider_register_main_mem_callback(MainMemCb cb);
+void modelprovider_unregister_main_mem_callback(void);
 
 void modelprovider_register_outer_stat_cb(OuterStatGetter cb);
 
