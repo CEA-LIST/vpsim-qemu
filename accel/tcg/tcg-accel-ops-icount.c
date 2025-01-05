@@ -117,7 +117,7 @@ void icount_prepare_for_run(CPUState *cpu, int64_t cpu_budget)
     replay_mutex_lock();
 
     cpu->icount_budget = MIN(icount_get_limit(), cpu_budget);
-    insns_left = MIN(0xffff, cpu->icount_budget);
+    insns_left = MIN(qslave_quantum, cpu->icount_budget);
     cpu->neg.icount_decr.u16.low = insns_left;
     cpu->icount_extra = cpu->icount_budget - insns_left;
 
