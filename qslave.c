@@ -43,7 +43,8 @@
 
 #define PPI(irq) ((irq) + 16)
 
-uint64_t qslave_quantum;
+#define MAX_QUANTUM 0xFFFF
+uint64_t qslave_quantum = MAX_QUANTUM;
 
 ReadCb _qslave_default_read_cb;
 WriteCb _qslave_default_write_cb;

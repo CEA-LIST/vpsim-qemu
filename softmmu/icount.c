@@ -111,7 +111,7 @@ static bool icount_update_locked(CPUState *cpu)
                     timers_state.qemu_icount + executed);
     qatomic_set_i64(&timers_state.qemu_icount_bias,
                        timers_state.qemu_icount_bias - executed);
-    if (__qslave_current_warp_cpu[cpu->cpu_index] >= 0xffff) { 
+    if (__qslave_current_warp_cpu[cpu->cpu_index] >= qslave_quantum) { 
         return true;
     }
     return false;

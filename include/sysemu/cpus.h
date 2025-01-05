@@ -40,6 +40,7 @@ void cpu_stop_current(void);
 extern int icount_align_option;
 
 extern __thread bool qslave_run_start;
+extern uint64_t qslave_quantum;
 
 /* Unblock cpu */
 void qemu_cpu_kick_self(void);

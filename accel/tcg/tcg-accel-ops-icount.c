@@ -105,7 +105,7 @@ void icount_prepare_for_run(CPUState *cpu)
     g_assert(cpu->icount_extra == 0);
 
     cpu->icount_budget = icount_get_limit();
-    insns_left = MIN(0xffff, cpu->icount_budget);
+    insns_left = MIN(qslave_quantum, cpu->icount_budget);
     cpu_neg(cpu)->icount_decr.u16.low = insns_left;
     cpu->icount_extra = cpu->icount_budget - insns_left;
 
