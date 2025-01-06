@@ -626,14 +626,16 @@ static void _qslave_mem_notify_functor(int write, void* phys, uint64_t virt, uin
 			write, phys, virt, size);
 }
 
-void modelprovider_register_main_mem_callback(MainMemCb cb) {
+void modelprovider_register_main_mem_callback(MainMemCb cb, uint64_t quantum) {
 	qslave_mem_notify_model=cb;
 	qslave_mem_notify=_qslave_mem_notify_functor;
+	qslave_quantum = quantum;
 }
 
 void modelprovider_unregister_main_mem_callback(void) {
 	qslave_mem_notify_model=NULL;
 	qslave_mem_notify=NULL;
+	qslave_quantum = MAX_QUANTUM;
 }
 
 ICacheMissCb qslave_icache_miss_cb=NULL;
