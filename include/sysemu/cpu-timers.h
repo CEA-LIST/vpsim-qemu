@@ -83,6 +83,9 @@ int64_t cpu_get_clock(void);
 
 void qemu_timer_notify_cb(void *opaque, QEMUClockType type);
 
+/* Return the conversion-factor aware virtual CPU time.  */
+int64_t cf_virtual_clock(void);
+
 /* get the VIRTUAL clock and VM elapsed ticks via the cpus accel interface */
 int64_t cpus_get_virtual_clock(void);
 int64_t cpus_get_elapsed_ticks(void);

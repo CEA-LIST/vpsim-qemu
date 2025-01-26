@@ -39,6 +39,7 @@ void cpu_stop_current(void);
 
 extern int icount_align_option;
 
+extern double conversion_factor;
 extern __thread bool qslave_run_start;
 extern uint64_t qslave_quantum;
 

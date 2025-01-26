@@ -77,7 +77,7 @@ static void align_clocks(SyncClocks *sc, CPUState *cpu)
     }
 
     cpu_icount = cpu->icount_extra + cpu_neg(cpu)->icount_decr.u16.low;
-    sc->diff_clk += icount_to_ns(sc->last_cpu_icount - cpu_icount);
+    sc->diff_clk += icount_to_ns(sc->last_cpu_icount - cpu_icount)/conversion_factor;
     sc->last_cpu_icount = cpu_icount;
 
     if (sc->diff_clk > VM_CLOCK_ADVANCE) {
@@ -1056,7 +1056,7 @@ void dump_drift_info(GString *buf)
     }
 
     g_string_append_printf(buf, "Host - Guest clock  %"PRIi64" ms\n",
-                           (cpu_get_clock() - icount_get()) / SCALE_MS);
+                           (cpu_get_clock() - cf_virtual_clock()) / SCALE_MS);
     if (icount_align_option) {
         g_string_append_printf(buf, "Max guest delay     %"PRIi64" ms\n",
                                -max_delay / SCALE_MS);
