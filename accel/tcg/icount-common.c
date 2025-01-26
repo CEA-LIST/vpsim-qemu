@@ -177,6 +177,12 @@ int64_t icount_get(void)
     return icount;
 }
 
+/* Return the conversion-factor aware virtual CPU time.  */
+int64_t cf_virtual_clock(void)
+{
+    return icount_get()/conversion_factor;
+}
+
 int64_t icount_to_ns(int64_t icount)
 {
     return icount << qatomic_read(&timers_state.icount_time_shift);
@@ -207,7 +213,7 @@ static void icount_adjust(void)
                                    cpu_get_clock_locked());
     cur_icount = icount_get_locked();
 
-    delta = cur_icount - cur_time;
+    delta = cur_icount/conversion_factor - cur_time;
     /* FIXME: This is a very crude algorithm, somewhat prone to oscillation.  */
     if (delta > 0
         && timers_state.last_delta + ICOUNT_WOBBLE < delta * 2
@@ -285,7 +291,7 @@ static void icount_warp_rt(void)
              * to go backwards).
              */
             int64_t cur_icount = icount_get_locked();
-            int64_t delta = clock - cur_icount;
+            int64_t delta = clock - cur_icount/conversion_factor;
 
             if (delta < 0) {
                 delta = 0;
@@ -293,7 +299,7 @@ static void icount_warp_rt(void)
             warp_delta = MIN(warp_delta, delta);
         }
         qatomic_set_i64(&timers_state.qemu_icount_bias,
-                        timers_state.qemu_icount_bias + warp_delta);
+                        timers_state.qemu_icount_bias + warp_delta*conversion_factor);
     }
     timers_state.vm_clock_warp_start = -1;
     seqlock_write_unlock(&timers_state.vm_clock_seqlock,
@@ -385,7 +391,7 @@ void icount_start_warp_timer(void)
             seqlock_write_lock(&timers_state.vm_clock_seqlock,
                                &timers_state.vm_clock_lock);
             qatomic_set_i64(&timers_state.qemu_icount_bias,
-                            timers_state.qemu_icount_bias + deadline);
+                            timers_state.qemu_icount_bias + deadline*conversion_factor);
             seqlock_write_unlock(&timers_state.vm_clock_seqlock,
                                  &timers_state.vm_clock_lock);
             qemu_clock_notify(QEMU_CLOCK_VIRTUAL);

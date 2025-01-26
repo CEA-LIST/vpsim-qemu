@@ -50,7 +50,7 @@ typedef void (*MainMemCbInternal)(
 				  uint64_t size);
 typedef uint64_t (*ICacheMissCb)(void* opaque, uint64_t addr, unsigned size, int* tb_hit);
 typedef void (*AddVictimCb)(void*);
-typedef void(*FillBiasCb)(uint64_t* ts, int n);
+typedef void(*FillBiasCb)(uint64_t* ts, int n, double sc_time_conversion_factor);
 extern MainMemCbInternal qslave_mem_notify;
 extern MainMemCb qslave_mem_notify_model;
 extern ICacheMissCb qslave_icache_miss_cb;
@@ -101,7 +101,7 @@ typedef void (*SyncCb)(void* opaque, uint64_t executed, int wfi);
 
 void modelprovider_register_icache_miss_cb(ICacheMissCb cb);
 
-void modelprovider_register_fill_bias_cb(FillBiasCb cb);
+void modelprovider_register_fill_bias_cb(FillBiasCb cb, double);
 int modelprovider_configure(int argc, char **argv, char **envp);
 void modelprovider_set_default_read_callback(ReadCb cb);
 void modelprovider_set_default_write_callback(WriteCb cb);

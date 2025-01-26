@@ -33,7 +33,7 @@
 #include "cpregs.h"
 #include "target/arm/gtimer.h"
 
-#define ARM_CPU_FREQ 1000000000 /* FIXME: 1 GHz, should be configurable */
+#define ARM_CPU_FREQ 1000000000LL*conversion_factor
 
 static void switch_mode(CPUARMState *env, int mode);
 
@@ -967,7 +967,7 @@ static uint64_t instructions_get_count(CPUARMState *env)
 static int64_t instructions_ns_per(uint64_t icount)
 {
     assert(icount_enabled() == ICOUNT_PRECISE);
-    return icount_to_ns((int64_t)icount);
+    return icount_to_ns((int64_t)icount)/conversion_factor;
 }
 
 // Q-SLAVE enabled cache hierarchy events
@@ -984,7 +984,7 @@ static uint64_t l1dcache_refill_get_count(CPUARMState* env) {
 static int64_t l1dcache_refill_ns_per(uint64_t val)
 {
 	// worst case, every instruction will be a miss
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 
 static uint64_t l2dcache_refill_get_count(CPUARMState* env) {
@@ -995,7 +995,7 @@ static uint64_t l2dcache_refill_get_count(CPUARMState* env) {
 static int64_t l2dcache_refill_ns_per(uint64_t val)
 {
 	// worst case, every instruction will be a miss
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 
 static uint64_t l1dcache_wb_get_count(CPUARMState* env) {
@@ -1006,7 +1006,7 @@ static uint64_t l1dcache_wb_get_count(CPUARMState* env) {
 static int64_t l1dcache_wb_ns_per(uint64_t val)
 {
 	// worst case, every instruction
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 
 static uint64_t l2dcache_wb_get_count(CPUARMState* env) {
@@ -1017,7 +1017,7 @@ static uint64_t l2dcache_wb_get_count(CPUARMState* env) {
 static int64_t l2dcache_wb_ns_per(uint64_t val)
 {
 	// worst case, every instruction
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 
 static uint64_t mem_access_get_count(CPUARMState* env) {
@@ -1029,7 +1029,7 @@ static uint64_t mem_access_get_count(CPUARMState* env) {
 static int64_t mem_access_ns_per(uint64_t val)
 {
 	// worst case, every instruction will be a mem access
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 
 static uint64_t l1dcache_access_get_count(CPUARMState* env) {
@@ -1041,7 +1041,7 @@ static uint64_t l1dcache_access_get_count(CPUARMState* env) {
 static int64_t l1dcache_access_ns_per(uint64_t val)
 {
 	// worst case, every instruction
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 
 static uint64_t l2dcache_access_get_count(CPUARMState* env) {
@@ -1053,7 +1053,7 @@ static uint64_t l2dcache_access_get_count(CPUARMState* env) {
 static int64_t l2dcache_access_ns_per(uint64_t val)
 {
 	// worst case, every instruction
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 
 static uint64_t l1icache_refill_get_count(CPUARMState* env) {
@@ -1064,7 +1064,7 @@ static uint64_t l1icache_refill_get_count(CPUARMState* env) {
 static int64_t l1icache_refill_ns_per(uint64_t val)
 {
 	// worst case, every instruction
-    return icount_to_ns((int64_t)val);
+    return icount_to_ns((int64_t)val)/conversion_factor;
 }
 #endif
 

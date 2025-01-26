@@ -48,6 +48,7 @@
 
 #define MAX_QUANTUM 0xFFFF
 uint64_t qslave_quantum = MAX_QUANTUM;
+double conversion_factor = 1.0;
 
 ReadCb _qslave_default_read_cb;
 WriteCb _qslave_default_write_cb;
@@ -582,7 +583,7 @@ __thread bool qslave_run_start = false;
 
 void qslave_yield(void* opaque, uint64_t executed, int wfi) {
 	CPUState* cpu = (CPUState*)opaque;
-	_qslave_sync_cb(_proxies[cpu->cpu_index], executed, wfi);
+	_qslave_sync_cb(_proxies[cpu->cpu_index], executed/conversion_factor, wfi);
 }
 
 uint64_t modelprovider_read_default(void *opaque,
@@ -605,7 +606,7 @@ uint64_t modelprovider_get_start_pc(int index) { return _start_pcs[index]; }
 static void _qslave_ioaccess_notify_functor(uint32_t device, int write, void* phys, uint64_t virt, uint64_t size, uint64_t tag) {
     //Modify the following execution counter (qemu timestamp) if it is not correct from within the context this function is called!
     uint64_t executed = current_cpu->icount_budget - (current_cpu->neg.icount_decr.u16.low + current_cpu->icount_extra);
-    qslave_ioaccess_notify_model(device, executed, write, phys, virt, size, tag);
+    qslave_ioaccess_notify_model(device, executed/conversion_factor, write, phys, virt, size, tag);
 }
 
 void modelprovider_register_ioaccess_callback(IOAccessCb cb) {
@@ -618,7 +619,7 @@ IOAccessCb qslave_ioaccess_notify_model=NULL;
 
 static void _qslave_mem_notify_functor(int write, void* phys, uint64_t virt, uint64_t size) {
         uint64_t executed = current_cpu->icount_budget - (current_cpu->neg.icount_decr.u16.low + current_cpu->icount_extra);
-	qslave_mem_notify_model(_proxies[current_cpu->cpu_index], executed,
+	qslave_mem_notify_model(_proxies[current_cpu->cpu_index], executed/conversion_factor,
 			write, phys, virt, size);
 }
 
@@ -657,11 +658,12 @@ MainMemCbInternal qslave_mem_notify=NULL;
 MainMemCb qslave_mem_notify_model=NULL;
 
 FillBiasCb _modelprovider_fill_bias_cb=NULL;
-void modelprovider_register_fill_bias_cb(FillBiasCb cb) {
+void modelprovider_register_fill_bias_cb(FillBiasCb cb, double sc_time_conversion_factor) {
 	_modelprovider_fill_bias_cb=cb;
+	conversion_factor = sc_time_conversion_factor;
 }
 void qslave_fill_biases(uint64_t* ts) {
-	_modelprovider_fill_bias_cb(ts,current_machine->smp.cpus);
+	_modelprovider_fill_bias_cb(ts,current_machine->smp.cpus,conversion_factor);
 }
 
 

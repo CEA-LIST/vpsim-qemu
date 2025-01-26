@@ -208,8 +208,8 @@ static void tcg_accel_ops_init(AccelOpsClass *ops)
 
         if (icount_enabled()) {
             ops->handle_interrupt = icount_handle_interrupt;
-            ops->get_virtual_clock = icount_get;
-            ops->get_elapsed_ticks = icount_get;
+            ops->get_virtual_clock = cf_virtual_clock;
+            ops->get_elapsed_ticks = cf_virtual_clock;
         } else {
             ops->handle_interrupt = tcg_handle_interrupt;
         }

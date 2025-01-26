@@ -28,7 +28,7 @@ static void dump_drift_info(GString *buf)
     }
 
     g_string_append_printf(buf, "Host - Guest clock  %"PRIi64" ms\n",
-                           (cpu_get_clock() - icount_get()) / SCALE_MS);
+                           (cpu_get_clock() - cf_virtual_clock()) / SCALE_MS);
     if (icount_align_option) {
         g_string_append_printf(buf, "Max guest delay     %"PRIi64" ms\n",
                                -max_delay / SCALE_MS);
