@@ -23,7 +23,9 @@
 #include "sysemu/sysemu.h"
 #include "hw/loader.h"
 #include "qemu/error-report.h"
+#include "hw/intc/arm_gic.h"
 #include "hw/intc/arm_gicv3_common.h"
+#include "hw/intc/arm_gicv3_its_common.h"
 #include "hw/irq.h"
 #include "hw/firmware/smbios.h"
 #include "kvm_arm.h"
@@ -31,6 +33,7 @@
 #include "hw/char/pl011.h"
 #include "hw/boards.h"
 #include "hw/arm/boot.h"
+#include "qapi/qmp/qlist.h"
 
 #define ARCH_GIC_MAINT_IRQ  9
 
@@ -283,14 +286,14 @@ static void qslave_build_smbios(FWCfgState *fw_cfg)
 {
     uint8_t *smbios_tables, *smbios_anchor;
     size_t smbios_tables_len, smbios_anchor_len;
+	struct smbios_phys_mem_area mem_array;
     const char *product = "QSLAVE Custom Virtual Machine";
 
-    smbios_set_defaults("QEMU", product,
-                        "1.0", false,
-                        true, SMBIOS_ENTRY_POINT_TYPE_64);
-
-    smbios_get_tables(current_machine, NULL, 0, &smbios_tables, &smbios_tables_len,
-                      &smbios_anchor, &smbios_anchor_len, &error_fatal);
+	smbios_set_defaults("QEMU", product, "1.0");
+	smbios_get_tables(current_machine, SMBIOS_ENTRY_POINT_TYPE_64, &mem_array, 1,
+		&smbios_tables, &smbios_tables_len,
+		&smbios_anchor, &smbios_anchor_len,
+		&error_fatal);
 
     if (smbios_anchor) {
         fw_cfg_add_file(fw_cfg, "etc/smbios/smbios-tables",
@@ -373,18 +376,11 @@ static void* create_pcie(void* devh, char* name,
         gpex_set_irq_num(GPEX_HOST(dev), i, irq + i);
     }
 
+	MachineClass *mc = MACHINE_GET_CLASS(current_machine);
     pci = PCI_HOST_BRIDGE(dev);
 	pci->bypass_iommu = false;
     if (pci->bus) {
-        for (i = 0; i < nb_nics; i++) {
-            NICInfo *nd = &nd_table[i];
-
-            if (!nd->model) {
-                nd->model = g_strdup("virtio");
-            }
-
-            pci_nic_init_nofail(nd, pci->bus, nd->model, NULL);
-        }
+		pci_init_nic_devices(pci->bus, mc->default_nic);
     }
 
     return dev;
@@ -482,7 +478,7 @@ void qslave_cpu_print_stats(int index);
 // FIXME: remove the printfs and use the proper stats API.
 static void qslave_aarch64_show(void* cpu) {
 	ARMCPU * armcpu = ARM_CPU(cpu);
-	CPUARMState *env = ((CPUState*)cpu)->env_ptr;
+	CPUARMState *env = &armcpu->env;
     uint32_t cur_el = arm_current_el(env);
 	int index;
 
@@ -607,7 +603,7 @@ uint64_t modelprovider_get_start_pc(int index) { return _start_pcs[index]; }
 
 static void _qslave_ioaccess_notify_functor(uint32_t device, int write, void* phys, uint64_t virt, uint64_t size, uint64_t tag) {
     //Modify the following execution counter (qemu timestamp) if it is not correct from within the context this function is called!
-    uint64_t executed = current_cpu->icount_budget - (cpu_neg(current_cpu)->icount_decr.u16.low + current_cpu->icount_extra);
+    uint64_t executed = current_cpu->icount_budget - (current_cpu->neg.icount_decr.u16.low + current_cpu->icount_extra);
     qslave_ioaccess_notify_model(device, executed, write, phys, virt, size, tag);
 }
 
@@ -620,7 +616,7 @@ IOAccessCbInternal qslave_ioaccess_notify=NULL;
 IOAccessCb qslave_ioaccess_notify_model=NULL;
 
 static void _qslave_mem_notify_functor(int write, void* phys, uint64_t virt, uint64_t size) {
-        uint64_t executed = current_cpu->icount_budget - (cpu_neg(current_cpu)->icount_decr.u16.low + current_cpu->icount_extra);
+        uint64_t executed = current_cpu->icount_budget - (current_cpu->neg.icount_decr.u16.low + current_cpu->icount_extra);
 	qslave_mem_notify_model(_proxies[current_cpu->cpu_index], executed,
 			write, phys, virt, size);
 }
@@ -755,7 +751,7 @@ void* modelprovider_create_internal_cpu(void *proxy, char* type, int index, uint
     object_property_set_bool(cpuobj, "has_el3", secure, NULL);
     object_property_set_bool(cpuobj, "has_el2", secure, NULL);
     object_property_set_int(cpuobj, "rvbar", start_pc, NULL);
-    object_property_set_int(cpuobj, "mp-affinity", arm_cpu_mp_affinity(index, 16), NULL);
+    object_property_set_int(cpuobj, "mp-affinity", arm_build_mp_affinity(index, 16), NULL);
     object_property_set_bool(cpuobj, "pmu", true, NULL);
 
     object_property_set_bool(cpuobj, "start-powered-off", start_off, NULL);
@@ -975,32 +971,17 @@ void modelprovider_post_init(MachineState *machine) {
 
 		// from virt
 		if (gic_version == 3) {
-			int n_redist = __qslave_gicv3_n_redist;
-
-
-			qdev_prop_set_uint32(gicdev, "len-redist-region-count",
-					n_redist);
-
-			int cpu_left=current_machine->smp.cpus;
-			int reg;
-			for (reg = 0; reg < n_redist; reg++) {
-				unsigned redist0_capacity =
-						__qslave_gicv3_redists[reg].size / GICV3_REDIST_SIZE;
-				unsigned redist0_count = MIN(current_machine->smp.cpus, redist0_capacity);
-				char region_param[512];
-				sprintf(region_param, "redist-region-count[%d]", reg);
-				qdev_prop_set_uint32(gicdev, region_param, redist0_count);
-				if (cpu_left > 0)
-					cpu_left -= redist0_count;
-			}
-
+			QList *redist_region_count;
+			redist_region_count = qlist_new();
+			unsigned redist0_capacity = __qslave_gicv3_redists[0].size / GICV3_REDIST_SIZE;
+			unsigned redist0_count = MIN(current_machine->smp.cpus, redist0_capacity);
+			qlist_append_int(redist_region_count, redist0_count);
+            qdev_prop_set_array(gicdev, "redist-region-count",redist_region_count);
 			sysbus_realize_and_unref(gicbusdev, &error_fatal);
-
-
 			sysbus_mmio_map(gicbusdev, 0, __qslave_gicv3_dist_base);
-			for (i = 0; i < n_redist; i++) {
-				SysBusDevice* gicbusdev = SYS_BUS_DEVICE(gicdev);
-				sysbus_mmio_map(gicbusdev, i+1, __qslave_gicv3_redists[i].base);
+
+			for (i = 0; i < __qslave_gicv3_n_redist; i++) {
+				sysbus_mmio_map(SYS_BUS_DEVICE(gicdev), i+1, __qslave_gicv3_redists[i].base);
 			}
 		}
 
@@ -1027,11 +1008,8 @@ void modelprovider_post_init(MachineState *machine) {
 												ppibase + ARCH_GIC_MAINT_IRQ);
 				sysbus_connect_irq(gicbusdev, i + 4 * current_machine->smp.cpus, irqc);
 			} else {
-				qemu_irq irq = qdev_get_gpio_in(gicdev,
-												ppibase + ARCH_GIC_MAINT_IRQ);
 				qdev_connect_gpio_out_named(cpudev, "gicv3-maintenance-interrupt",
-											0, irq);
-
+					0, qdev_get_gpio_in(gicdev,ppibase + ARCH_GIC_MAINT_IRQ));
 			}
 
 			qdev_connect_gpio_out_named(cpudev, "pmu-interrupt", 0,
