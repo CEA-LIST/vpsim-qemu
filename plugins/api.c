@@ -434,6 +434,12 @@ uint64_t qemu_plugin_hwaddr_phys_addr(const struct qemu_plugin_hwaddr *haddr)
     return 0;
 }
 
+#include "qslave.h"
+
+void qemu_plugin_mem_notify(unsigned int vcpu_index, MMUAccessType access_type, const struct qemu_plugin_hwaddr *haddr, uint64_t vaddr, unsigned size){
+    if (qslave_mem_notify) qslave_mem_notify(access_type, haddr->hostaddr, vaddr, size);
+}
+
 const char *qemu_plugin_hwaddr_device_name(const struct qemu_plugin_hwaddr *h)
 {
 #ifdef CONFIG_SOFTMMU

@@ -603,10 +603,10 @@ void modelprovider_write_default(void *opaque,
 
 uint64_t modelprovider_get_start_pc(int index) { return _start_pcs[index]; }
 
-static void _qslave_ioaccess_notify_functor(uint32_t device, int write, void* phys, uint64_t virt, uint64_t size, uint64_t tag) {
+static void _qslave_ioaccess_notify_functor(uint32_t device, MMUAccessType access_type, void* phys, uint64_t virt, uint64_t size, uint64_t tag) {
     //Modify the following execution counter (qemu timestamp) if it is not correct from within the context this function is called!
     uint64_t executed = current_cpu->icount_budget - (current_cpu->neg.icount_decr.u16.low + current_cpu->icount_extra);
-    qslave_ioaccess_notify_model(device, executed/conversion_factor, write, phys, virt, size, tag);
+    qslave_ioaccess_notify_model(device, executed/conversion_factor, access_type, phys, virt, size, tag);
 }
 
 void modelprovider_register_ioaccess_callback(IOAccessCb cb) {
@@ -617,10 +617,10 @@ void modelprovider_register_ioaccess_callback(IOAccessCb cb) {
 IOAccessCbInternal qslave_ioaccess_notify=NULL;
 IOAccessCb qslave_ioaccess_notify_model=NULL;
 
-static void _qslave_mem_notify_functor(int write, void* phys, uint64_t virt, uint64_t size) {
+static void _qslave_mem_notify_functor(MMUAccessType access_type, void* phys, uint64_t virt, uint64_t size) {
         uint64_t executed = current_cpu->icount_budget - (current_cpu->neg.icount_decr.u16.low + current_cpu->icount_extra);
 	qslave_mem_notify_model(_proxies[current_cpu->cpu_index], executed/conversion_factor,
-			write, phys, virt, size);
+			access_type, phys, virt, size);
 }
 
 void modelprovider_register_main_mem_callback(MainMemCb cb, uint64_t quantum) {

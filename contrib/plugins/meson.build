@@ -1,5 +1,5 @@
 contrib_plugins = ['bbv', 'cache', 'cflow', 'drcov', 'execlog', 'hotblocks',
-                   'hotpages', 'howvec', 'hwprofile', 'ips', 'stoptrigger']
+                   'hotpages', 'howvec', 'hwprofile', 'ips', 'stoptrigger', 'vpsimplugin']
 if host_os != 'windows'
   # lockstep uses socket.h
   contrib_plugins += 'lockstep'
@@ -17,6 +17,7 @@ if get_option('plugins')
     else
       t += shared_module(i, files(i + '.c'),
                         include_directories: '../../include/qemu',
+                        link_args: ['-L' + meson.build_root(), '-lvpsim-aarch64','-L' + meson.global_build_root()],
                         dependencies: glib)
     endif
   endforeach

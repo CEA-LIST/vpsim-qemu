@@ -15,6 +15,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "exec/mmu-access-type.h"
 
 /*
  * For best performance, build the plugin with -fvisibility=hidden so that
@@ -635,6 +636,17 @@ bool qemu_plugin_hwaddr_is_io(const struct qemu_plugin_hwaddr *haddr);
  */
 QEMU_PLUGIN_API
 uint64_t qemu_plugin_hwaddr_phys_addr(const struct qemu_plugin_hwaddr *haddr);
+
+/**
+ * qemu_plugin_mem_notify() - forward memory access notification to qslave interface
+ * @vcpu_index: the executing vCPU
+ * @access_type: data load or data store
+ * @haddr: address handle from qemu_plugin_get_hwaddr()
+ * @vaddr: the virtual address of the memory operation
+ * @size: size (in bytes) of the memory access
+ */
+QEMU_PLUGIN_API
+void qemu_plugin_mem_notify(unsigned int vcpu_index, MMUAccessType access_type, const struct qemu_plugin_hwaddr *haddr, uint64_t vaddr, unsigned size);
 
 /*
  * Returns a string representing the device. The string is valid for

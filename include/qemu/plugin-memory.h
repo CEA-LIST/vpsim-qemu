@@ -17,6 +17,7 @@ struct qemu_plugin_hwaddr {
     bool is_store;
     hwaddr phys_addr;
     MemoryRegion *mr;
+    void *hostaddr;
 };
 
 /**

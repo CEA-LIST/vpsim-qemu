@@ -4282,6 +4282,13 @@ foreach target : target_dirs
                link_args: link_args,
                win_subsystem: exe['win_subsystem'])
 
+    outfile = 'libvpsim-' + target_name + '.so'
+    mytarget = custom_target('vpsim-' + target_name,
+                output : outfile,
+                input : emulator,
+                command : ['cp', '@INPUT@', '@OUTPUT@'],
+                install : false)
+
     if host_os == 'darwin'
       icon = 'pc-bios/qemu.rsrc'
       build_input = [emulator, files(icon)]

@@ -23,6 +23,7 @@
 
 #include "qemu/osdep.h"
 #include "hw/pci-host/gpex.h"
+#include "exec/mmu-access-type.h"
 
 #define MAX_CPUS 128
 #define NUM_IRQS 256
@@ -39,12 +40,12 @@ typedef void (*WriteCb)(void *opaque,
                   unsigned size);
 
 typedef void (*MainMemCb)(void* opaque,uint64_t exec,
-		          int is_write,
+		          MMUAccessType access_type,
 		          void* phys,
 				  uint64_t virt,
 				  uint64_t size);
 typedef void (*MainMemCbInternal)(
-		          int is_write,
+		          MMUAccessType access_type,
 		          void* phys,
 				  uint64_t virt,
 				  uint64_t size);
@@ -74,14 +75,14 @@ typedef uint64_t (*OuterStatGetter)(int index, enum OuterStat type);
 
 typedef void (*IOAccessCb)( uint32_t device,
                             uint64_t exec,
-                            int is_write,
+                            MMUAccessType access_type,
                             void* phys,
                             uint64_t virt,
                             uint64_t size,
                             uint64_t tag);
 typedef void (*IOAccessCbInternal)(
                             uint32_t device,
-                            int is_write,
+                            MMUAccessType access_type,
                             void* phys,
                             uint64_t virt,
                             uint64_t size,

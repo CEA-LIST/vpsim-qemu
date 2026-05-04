@@ -952,7 +952,7 @@ static inline bool cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
 static int __attribute__((noinline))
 cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 {
-    int ret;
+    int ret = 0;
 
     /* if an exception is pending, we execute it here */
     while (!cpu_handle_exception(cpu, &ret)) {
