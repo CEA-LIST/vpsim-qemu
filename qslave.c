@@ -53,6 +53,7 @@ double conversion_factor = 1.0;
 ReadCb _qslave_default_read_cb;
 WriteCb _qslave_default_write_cb;
 SyncCb _qslave_sync_cb;
+ShutdownCb _qslave_shutdown_cb;
 
 void (*_qslave_unlock_cb) (void*);
 void (*_qslave_wait_unlock_cb) (void*);
@@ -577,6 +578,10 @@ void modelprovider_set_default_write_callback(WriteCb cb) {
 
 void modelprovider_set_sync_callback(SyncCb cb) {
 	_qslave_sync_cb = cb;
+}
+
+void modelprovider_set_shutdown_callback(ShutdownCb cb) {
+	_qslave_shutdown_cb = cb;
 }
 
 __thread bool qslave_run_start = false;

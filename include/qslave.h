@@ -98,6 +98,8 @@ typedef uint64_t (*IOAccessStatGetter)(uint32_t device, enum IOAccessStat type);
 typedef char(*IOAccessGetDelayCb)(uint32_t device, uint64_t* time_stamp, uint64_t* delay, uint64_t* tag);
 
 typedef void (*SyncCb)(void* opaque, uint64_t executed, int wfi);
+typedef void (*ShutdownCb)(void);
+extern ShutdownCb _qslave_shutdown_cb;
 #pragma GCC visibility push(default)
 
 void modelprovider_register_icache_miss_cb(ICacheMissCb cb);
@@ -107,6 +109,7 @@ int modelprovider_configure(int argc, char **argv, char **envp);
 void modelprovider_set_default_read_callback(ReadCb cb);
 void modelprovider_set_default_write_callback(WriteCb cb);
 void modelprovider_set_sync_callback(SyncCb cb);
+void modelprovider_set_shutdown_callback(ShutdownCb cb);
 uint64_t modelprovider_get_start_pc(int index);
 void modelprovider_register_main_mem_callback(MainMemCb cb, uint64_t quantum);
 void modelprovider_unregister_main_mem_callback(void);
